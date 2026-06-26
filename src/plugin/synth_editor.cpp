@@ -4520,51 +4520,71 @@ void SynthEditor::showNavigationMenu() {
 }
 
 void SynthEditor::showAccessibilitySettingsMenu() {
-  auto& settings = accessibilitySpeechSettings();
-  PopupMenu menu;
-  menu.addSectionHeader("Speech feedback");
-  menu.addItem(1, "Use speech feedback: " + onOff(settings.speech_feedback), true, settings.speech_feedback);
-  menu.addSeparator();
-  menu.addItem(2, "Navigation announcements: " + onOff(settings.navigation), true, settings.navigation);
-  menu.addItem(3, "Preset announcements: " + onOff(settings.presets), true, settings.presets);
-  menu.addItem(4, "LFO editor announcements: " + onOff(settings.lfo_editor), true, settings.lfo_editor);
-  menu.addItem(5, "Wavetable editor announcements: " + onOff(settings.wavetable_editor), true,
-               settings.wavetable_editor);
-  menu.addItem(6, "Sample and granular announcements: " + onOff(settings.sample_browser), true,
-               settings.sample_browser);
-  menu.addItem(7, "Modulation announcements: " + onOff(settings.modulation), true, settings.modulation);
-  menu.addItem(8, "Parameter value announcements: " + onOff(settings.parameters), true, settings.parameters);
-  menu.addItem(9, "Other announcements: " + onOff(settings.other), true, settings.other);
+  struct Entry {
+    const char* label;
+    bool AccessibilitySpeechSettings::* field;
+  };
 
-  menu.showMenuAsync(PopupMenu::Options().withTargetComponent(menu_button_),
-                     [this](int result) {
-    auto& settings = accessibilitySpeechSettings();
-    if (result == 1)
-      settings.speech_feedback = !settings.speech_feedback;
-    else if (result == 2)
-      settings.navigation = !settings.navigation;
-    else if (result == 3)
-      settings.presets = !settings.presets;
-    else if (result == 4)
-      settings.lfo_editor = !settings.lfo_editor;
-    else if (result == 5)
-      settings.wavetable_editor = !settings.wavetable_editor;
-    else if (result == 6)
-      settings.sample_browser = !settings.sample_browser;
-    else if (result == 7)
-      settings.modulation = !settings.modulation;
-    else if (result == 8)
-      settings.parameters = !settings.parameters;
-    else if (result == 9)
-      settings.other = !settings.other;
+  static const Entry kEntries[] = {
+    { "Use speech feedback",               &AccessibilitySpeechSettings::speech_feedback  },
+    { "Navigation announcements",          &AccessibilitySpeechSettings::navigation       },
+    { "Preset announcements",              &AccessibilitySpeechSettings::presets          },
+    { "LFO editor announcements",          &AccessibilitySpeechSettings::lfo_editor       },
+    { "Wavetable editor announcements",    &AccessibilitySpeechSettings::wavetable_editor },
+    { "Sample and granular announcements", &AccessibilitySpeechSettings::sample_browser   },
+    { "Modulation announcements",          &AccessibilitySpeechSettings::modulation       },
+    { "Parameter value announcements",     &AccessibilitySpeechSettings::parameters       },
+    { "Other announcements",               &AccessibilitySpeechSettings::other            },
+  };
 
-    if (result > 0) {
-      saveAccessibilitySpeechSettings();
-      if (settings.speech_feedback)
-        AccessibilityHandler::postAnnouncement("Accessibility settings updated",
-                                               AccessibilityHandler::AnnouncementPriority::medium);
+  class DialogContent : public Component {
+  public:
+    DialogContent() {
+      auto& settings = accessibilitySpeechSettings();
+      for (const auto& e : kEntries) {
+        auto btn = std::make_unique<ToggleButton>(e.label);
+        btn->setToggleState(settings.*(e.field), dontSendNotification);
+        auto* btn_ptr = btn.get();
+        auto field = e.field;
+        btn->onStateChange = [btn_ptr, field]() {
+          accessibilitySpeechSettings().*field = btn_ptr->getToggleState();
+          saveAccessibilitySpeechSettings();
+        };
+        addAndMakeVisible(*btn);
+        buttons_.push_back(std::move(btn));
+      }
+      setSize(360, static_cast<int>(sizeof(kEntries) / sizeof(kEntries[0])) * 28 + 16);
     }
-  });
+
+    void resized() override {
+      int y = 8;
+      for (auto& btn : buttons_) {
+        btn->setBounds(8, y, getWidth() - 16, 24);
+        y += 28;
+      }
+    }
+
+  private:
+    std::vector<std::unique_ptr<ToggleButton>> buttons_;
+  };
+
+  DialogWindow::LaunchOptions opts;
+  opts.dialogTitle = "Accessibility Settings";
+  opts.content.setOwned(new DialogContent());
+  opts.componentToCentreAround = this;
+  opts.useNativeTitleBar = true;
+  opts.resizable = false;
+  opts.escapeKeyTriggersCloseButton = true;
+  auto* dlg = opts.launchAsync();
+  if (dlg) {
+    Component::SafePointer<DialogWindow> safe_dlg(dlg);
+    MessageManager::callAsync([safe_dlg]() {
+      if (safe_dlg && safe_dlg->getContentComponent()) {
+        if (auto* first = safe_dlg->getContentComponent()->getChildComponent(0))
+          first->grabKeyboardFocus();
+      }
+    });
+  }
 }
 
 File SynthEditor::defaultPatchFile() const {
