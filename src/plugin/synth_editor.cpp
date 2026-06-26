@@ -2128,6 +2128,11 @@ class AccessibleParameterRow : public Component {
       updateAccessibleCommand();
     }
 
+    void setModulationDestinationPredicate(std::function<bool(const String&)> predicate) {
+      is_modulation_destination_ = std::move(predicate);
+      updateAccessibleCommand();
+    }
+
     void setValueEntryCallback(std::function<void(const String&, Component&)> callback) {
       auto* bridge = dynamic_cast<ValueBridge*>(&parameter_);
       const String parameter_id = bridge != nullptr ? bridge->getParameterId() : String();
@@ -2185,6 +2190,12 @@ class AccessibleParameterRow : public Component {
       kContextToggleBipolar,
     };
 
+    bool canAddModulation(const String& parameter_id) const {
+      if (!modulation_menu_callback_ || parameter_id.isEmpty())
+        return false;
+      return !is_modulation_destination_ || is_modulation_destination_(parameter_id);
+    }
+
     void showContextMenu(Component& target) {
       auto* bridge = dynamic_cast<ValueBridge*>(&parameter_);
       const String parameter_id = bridge != nullptr ? bridge->getParameterId() : String();
@@ -2199,7 +2210,7 @@ class AccessibleParameterRow : public Component {
       if (!is_toggle && slider_.onTextEntryCommand)
         menu.addItem(kContextTypeValue, "Type a value\xe2\x80\xa6");
       menu.addItem(kContextResetDefault, "Reset to default");
-      if (modulation_menu_callback_)
+      if (canAddModulation(parameter_id))
         menu.addItem(kContextAddModulation, "Add modulation source\xe2\x80\xa6");
       if (midi_learn_callback_) {
         menu.addItem(kContextMidiLearn, "MIDI learn");
@@ -2226,7 +2237,7 @@ class AccessibleParameterRow : public Component {
             resetToDefaultValue();
             break;
           case kContextAddModulation:
-            if (modulation_menu_callback_)
+            if (canAddModulation(parameter_id))
               modulation_menu_callback_(parameter_id, *invoked);
             break;
           case kContextMidiLearn:
@@ -2271,6 +2282,7 @@ class AccessibleParameterRow : public Component {
     OffscreenToggleButton toggle_;
     std::function<String(double)> text_from_value_;
     std::function<void(const String&, Component&)> modulation_menu_callback_;
+    std::function<bool(const String&)> is_modulation_destination_;
     std::function<void(const String&, Component&, bool)> midi_learn_callback_;
     std::function<bool(const String&, const KeyPress&, Component&)> extra_command_callback_;
     double min_normalized_value_ = 0.0;
@@ -2288,7 +2300,7 @@ class AccessibleParameterRow : public Component {
         if (extra_command_callback_ && extra_command_callback_(parameter_id, key, target))
           return true;
 
-        if (isModulationMenuKey(key) && modulation_menu_callback_) {
+        if (isModulationMenuKey(key) && canAddModulation(parameter_id)) {
           modulation_menu_callback_(parameter_id, target);
           return true;
         }
@@ -3876,6 +3888,7 @@ void SynthEditor::showSection(int index, bool announce) {
     row->setModulationMenuCallback([this](const String& destinationId, Component& target) {
       showModulationSourceMenuForParameter(destinationId, target);
     });
+    row->setModulationDestinationPredicate([this](const String& id) { return isModulationDestinationId(id); });
     row->setMidiLearnCallback([this](const String& parameterId, Component&, bool clear) {
       if (clear) {
         synth_.clearMidiLearn(parameterId.toStdString());
@@ -4035,6 +4048,7 @@ void SynthEditor::showAllSections(bool announce) {
             row->setModulationMenuCallback([this](const String& destinationId, Component& target) {
               showModulationSourceMenuForParameter(destinationId, target);
             });
+            row->setModulationDestinationPredicate([this](const String& id) { return isModulationDestinationId(id); });
             row->setMidiLearnCallback([this](const String& parameterId, Component&, bool clear) {
               if (clear) {
                 synth_.clearMidiLearn(parameterId.toStdString());
@@ -4373,6 +4387,7 @@ void SynthEditor::showAllSections(bool announce) {
         row->setModulationMenuCallback([this](const String& destinationId, Component& target) {
           showModulationSourceMenuForParameter(destinationId, target);
         });
+        row->setModulationDestinationPredicate([this](const String& id) { return isModulationDestinationId(id); });
         row->setMidiLearnCallback([this](const String& parameterId, Component&, bool clear) {
           if (clear) {
             synth_.clearMidiLearn(parameterId.toStdString());
@@ -5267,6 +5282,13 @@ void SynthEditor::savePresetFile(const File& file) {
   updatePresetSummary();
   postPluginAnnouncement("Saved preset " + file.withFileExtension(vital::kPresetExtension).getFileNameWithoutExtension(),
                                          AccessibilityHandler::AnnouncementPriority::high);
+}
+
+bool SynthEditor::isModulationDestinationId(const String& id) const {
+  // Only parameters registered with the engine as modulation destinations can be connected.
+  // Plain base controls (e.g. the envelope power sliders) have no destination, so offering to
+  // modulate them would connect to a null destination and crash on the audio thread.
+  return synth_.getEngine()->getMonoModulationDestination(id.toStdString()) != nullptr;
 }
 
 void SynthEditor::populateModulationDestinations() {
@@ -7015,6 +7037,7 @@ void SynthEditor::showSelectedModulationParameters() {
     control->setModulationMenuCallback([this](const String& destinationId, Component& target) {
       showModulationSourceMenuForParameter(destinationId, target);
     });
+    control->setModulationDestinationPredicate([this](const String& id) { return isModulationDestinationId(id); });
     control->setMidiLearnCallback([this](const String& parameterId, Component&, bool clear) {
       if (clear) {
         synth_.clearMidiLearn(parameterId.toStdString());

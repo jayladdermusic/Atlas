@@ -220,6 +220,7 @@ class SynthEditor : public AudioProcessorEditor, public SynthGuiInterface,
     void setModulationControlsVisible(bool visible);
     void populateModulationDestinations();
     void updateModulationDestinationList();
+    bool isModulationDestinationId(const String& id) const;
     void setLfoMsegControlsVisible(bool visible);
     void refreshLfoMsegControls();
     void updateLfoPointSelector();

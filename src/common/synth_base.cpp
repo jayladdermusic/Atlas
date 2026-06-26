@@ -170,6 +170,12 @@ vital::modulation_change SynthBase::createModulationChange(vital::ModulationConn
 }
 
 bool SynthBase::isInvalidConnection(const vital::modulation_change& change) {
+  // Some parameters (e.g. the envelope power sliders) are plain base controls and are not
+  // registered as modulation destinations, so the engine has no destination to plug into.
+  // Connecting to one would dereference a null destination on the audio thread, so treat any
+  // change with a missing destination as invalid here rather than letting it reach the engine.
+  if (change.mono_destination == nullptr)
+    return true;
   return change.poly_destination && change.poly_destination->router() == change.modulation_processor;
 }
 

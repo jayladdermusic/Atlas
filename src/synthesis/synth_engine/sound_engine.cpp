@@ -228,6 +228,12 @@ namespace vital {
   }
 
   void SoundEngine::connectModulation(const modulation_change& change) {
+    // Audio-thread backstop: a destination that isn't a registered modulation target (e.g. the
+    // envelope power sliders) leaves mono_destination null. Bail rather than dereference it.
+    if (change.mono_destination == nullptr || change.source == nullptr ||
+        change.modulation_processor == nullptr || change.mono_modulation_switch == nullptr)
+      return;
+
     change.modulation_processor->plug(change.source, ModulationConnectionProcessor::kModulationInput);
     change.modulation_processor->setDestinationScale(change.destination_scale);
     VITAL_ASSERT(vital::utils::isFinite(change.destination_scale));
