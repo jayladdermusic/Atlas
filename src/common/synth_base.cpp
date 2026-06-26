@@ -557,6 +557,18 @@ void SynthBase::renderAudioForResynthesis(float* data, int samples, int note) {
   engine_->allSoundsOff();
 }
 
+bool SynthBase::saveCopyToFile(File preset) {
+  preset = preset.withFileExtension(String(vital::kPresetExtension));
+
+  File parent = preset.getParentDirectory();
+  if (!parent.exists()) {
+    if (!parent.createDirectory().wasOk() || !parent.hasWriteAccess())
+      return false;
+  }
+
+  return preset.replaceWithText(saveToJson().dump());
+}
+
 bool SynthBase::saveToFile(File preset) {
   preset = preset.withFileExtension(String(vital::kPresetExtension));
 

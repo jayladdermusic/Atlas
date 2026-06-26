@@ -86,6 +86,7 @@ class SynthBase : public MidiManager::Listener {
     bool loadFromFile(File preset, std::string& error);
     void renderAudioToFile(File file, float seconds, float bpm, std::vector<int> notes, bool render_images);
     void renderAudioForResynthesis(float* data, int samples, int note);
+    bool saveCopyToFile(File preset);
     bool saveToFile(File preset);
     bool saveToActiveFile();
     void clearActiveFile() { active_file_ = File(); }

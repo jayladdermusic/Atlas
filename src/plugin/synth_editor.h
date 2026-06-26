@@ -135,6 +135,10 @@ class SynthEditor : public AudioProcessorEditor, public SynthGuiInterface,
                                   const String& accessibleTitle = {});
     void moveToSection(int direction);
     void showNavigationMenu();
+    void showAccessibilitySettingsMenu();
+    void initializePatch();
+    void savePatchAsDefault();
+    File defaultPatchFile() const;
     void rebuildFocusOrder();
     void refreshPresetList();
     void populatePresetFilters();
@@ -288,7 +292,7 @@ class SynthEditor : public AudioProcessorEditor, public SynthGuiInterface,
     ComboBox preset_category_;
     TextEditor preset_search_;
     PresetComboBox preset_selector_;
-    ToggleButton preset_preview_ { "Preview selected preset" };
+    ToggleButton preset_preview_ { "Autoload preset when scrolling" };
     TextEditor preset_name_editor_;
     Label wavetable_name_;
     TextButton load_wavetable_ { "Load wavetable" };

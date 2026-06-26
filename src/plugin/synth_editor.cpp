@@ -47,10 +47,106 @@ namespace {
   constexpr const char* kAllCategories = "All categories";
   constexpr int kBrowserRescanMenuId = 0x3fff0001;
 
-  void postPluginAnnouncement(const String&, AccessibilityHandler::AnnouncementPriority) { }
+  struct AccessibilitySpeechSettings {
+    bool speech_feedback = true;
+    bool navigation = false;
+    bool presets = false;
+    bool lfo_editor = true;
+    bool wavetable_editor = false;
+    bool sample_browser = false;
+    bool modulation = true;
+    bool parameters = false;
+    bool other = false;
+  };
+
+  AccessibilitySpeechSettings& accessibilitySpeechSettings() {
+    static AccessibilitySpeechSettings settings;
+    static bool loaded = false;
+    if (!loaded) {
+      loaded = true;
+      json config = LoadSave::getConfigJson();
+      if (config.count("accessibility_speech") && config["accessibility_speech"].is_object()) {
+        const json& data = config["accessibility_speech"];
+        auto loadBool = [&data](const char* name, bool fallback) {
+          return data.count(name) && data[name].is_boolean() ? data[name].get<bool>() : fallback;
+        };
+        settings.speech_feedback = loadBool("speech_feedback", settings.speech_feedback);
+        settings.navigation = loadBool("navigation", settings.navigation);
+        settings.presets = loadBool("presets", settings.presets);
+        settings.lfo_editor = loadBool("lfo_editor", settings.lfo_editor);
+        settings.wavetable_editor = loadBool("wavetable_editor", settings.wavetable_editor);
+        settings.sample_browser = loadBool("sample_browser", settings.sample_browser);
+        settings.modulation = loadBool("modulation", settings.modulation);
+        settings.parameters = loadBool("parameters", settings.parameters);
+        settings.other = loadBool("other", settings.other);
+      }
+    }
+    return settings;
+  }
+
+  void saveAccessibilitySpeechSettings() {
+    const auto& settings = accessibilitySpeechSettings();
+    json config = LoadSave::getConfigJson();
+    json data;
+    data["speech_feedback"] = settings.speech_feedback;
+    data["navigation"] = settings.navigation;
+    data["presets"] = settings.presets;
+    data["lfo_editor"] = settings.lfo_editor;
+    data["wavetable_editor"] = settings.wavetable_editor;
+    data["sample_browser"] = settings.sample_browser;
+    data["modulation"] = settings.modulation;
+    data["parameters"] = settings.parameters;
+    data["other"] = settings.other;
+    config["accessibility_speech"] = data;
+    LoadSave::saveJsonToConfig(config);
+  }
+
+  String onOff(bool enabled) {
+    return enabled ? "On" : "Off";
+  }
+
+  bool containsAny(const String& text, std::initializer_list<const char*> words) {
+    for (const auto* word : words) {
+      if (text.contains(word))
+        return true;
+    }
+    return false;
+  }
+
+  bool shouldPostPluginAnnouncement(const String& message) {
+    const auto& settings = accessibilitySpeechSettings();
+    if (!settings.speech_feedback)
+      return false;
+
+    const String lower = message.toLowerCase();
+    if (containsAny(lower, { "preset", "bank" }))
+      return settings.presets;
+    if (containsAny(lower, { "lfo", "mseg", "point", "curve", "grid", "shape" }))
+      return settings.lfo_editor;
+    if (containsAny(lower, { "wavetable", "harmonic", "fundamental", "wave frame", "frame" }) ||
+        (lower.startsWith("loaded ") && lower.contains(" in oscillator")) ||
+        (lower.startsWith("normalized ") && lower.contains(" frame")))
+      return settings.wavetable_editor;
+    if (containsAny(lower, { "sample", "granular" }))
+      return settings.sample_browser;
+    if (containsAny(lower, { "modulation", "midi learn", "assigned", "destination" }))
+      return settings.modulation;
+    if (containsAny(lower, { "type value", "reset to", "macro" }))
+      return settings.parameters;
+    if (containsAny(lower, { "oscillator", "mixer", "routing", "filter", "envelope", "effects", "global", "zones" }))
+      return settings.navigation;
+    return settings.other;
+  }
+
+  void postPluginAnnouncement(const String& message, AccessibilityHandler::AnnouncementPriority priority) {
+    if (shouldPostPluginAnnouncement(message))
+      AccessibilityHandler::postAnnouncement(message, priority);
+  }
 
   void postLfoAnnouncement(const String& message) {
-    AccessibilityHandler::postAnnouncement(message, AccessibilityHandler::AnnouncementPriority::high);
+    const auto& settings = accessibilitySpeechSettings();
+    if (settings.speech_feedback && settings.lfo_editor)
+      AccessibilityHandler::postAnnouncement(message, AccessibilityHandler::AnnouncementPriority::high);
   }
 
   struct MsegTimeDivision {
@@ -2291,8 +2387,8 @@ SynthEditor::SynthEditor(SynthPlugin& synth) :
   addAndMakeVisible(instructions_);
 
   menu_button_.setTitle("Editor menu");
-  menu_button_.setDescription("Open accessible navigation and routing commands");
-  menu_button_.setHelpText("Press Enter to open a menu of sections and common routing commands");
+  menu_button_.setDescription("Open patch and accessibility settings");
+  menu_button_.setHelpText("Press Enter to save the current patch, initialize the patch, or change accessibility settings");
   menu_button_.setWantsKeyboardFocus(true);
   menu_button_.onClick = [this] { showNavigationMenu(); };
   addAndMakeVisible(menu_button_);
@@ -2334,8 +2430,8 @@ SynthEditor::SynthEditor(SynthPlugin& synth) :
   addChildComponent(preset_summary_);
 
   preset_menu_.setTitle("Preset menu");
-  preset_menu_.setDescription("Open preset actions including load, save, import preset, import bank, and refresh");
-  preset_menu_.setHelpText("Press Enter to open preset file actions");
+  preset_menu_.setDescription("Open preset browser actions including refresh, open preset file, import bank, and export bank");
+  preset_menu_.setHelpText("Press Enter to open preset browser actions");
   preset_menu_.setWantsKeyboardFocus(true);
   preset_menu_.onClick = [this] { showPresetMenu(); };
   addChildComponent(preset_menu_);
@@ -2348,6 +2444,7 @@ SynthEditor::SynthEditor(SynthPlugin& synth) :
     if (updating_preset_list_)
       return;
     last_preset_bank = preset_bank_.getText();
+    last_preset_category = kAllCategories;
     populatePresetFilters();
     filterPresetList();
   };
@@ -2379,7 +2476,7 @@ SynthEditor::SynthEditor(SynthPlugin& synth) :
 
   preset_selector_.setTitle("Preset list");
   preset_selector_.setDescription("Factory and user presets from Atlas's resources folder. Press Enter to load.");
-  preset_selector_.setHelpText("Choose a preset, then press Enter to load it. If preview is enabled, changing selection loads immediately.");
+  preset_selector_.setHelpText("Choose a preset, then press Enter to load it. If autoload is enabled, changing selection loads immediately.");
   preset_selector_.setWantsKeyboardFocus(true);
   preset_selector_.onReturnKey = [this] { loadSelectedPreset(); };
   preset_selector_.onChange = [this] {
@@ -2393,21 +2490,21 @@ SynthEditor::SynthEditor(SynthPlugin& synth) :
   };
   addChildComponent(preset_selector_);
 
-  preset_preview_.setTitle("Preview selected preset");
+  preset_preview_.setTitle("Autoload preset when scrolling");
   preset_preview_.setDescription("Automatically load presets as you move through the preset list");
-  preset_preview_.setHelpText("Turn this on to audition presets while browsing. Leave it off to load only when pressing Enter.");
+  preset_preview_.setHelpText("Turn this on to load presets while scrolling. Leave it off to load only when pressing Enter.");
   preset_preview_.setWantsKeyboardFocus(true);
   preset_preview_.setToggleState(last_preset_preview, dontSendNotification);
   preset_preview_.onClick = [this] {
     last_preset_preview = preset_preview_.getToggleState();
-    postPluginAnnouncement(last_preset_preview ? "Preset preview enabled" : "Preset preview disabled",
+    postPluginAnnouncement(last_preset_preview ? "Preset autoload enabled" : "Preset autoload disabled",
                                            AccessibilityHandler::AnnouncementPriority::medium);
   };
   addChildComponent(preset_preview_);
 
   preset_name_editor_.setTitle("Preset name");
-  preset_name_editor_.setDescription("Name to use when saving into the user preset folder");
-  preset_name_editor_.setHelpText("Type a preset name, then press Save to user presets");
+  preset_name_editor_.setDescription("Name to suggest when saving the patch");
+  preset_name_editor_.setHelpText("Type a preset name, then use Editor menu, Save patch as");
   preset_name_editor_.setTextToShowWhenEmpty("Preset name", Colours::grey);
   preset_name_editor_.setWantsKeyboardFocus(true);
   addChildComponent(preset_name_editor_);
@@ -4402,86 +4499,117 @@ void SynthEditor::showAllSections(bool announce) {
 
 void SynthEditor::showNavigationMenu() {
   PopupMenu menu;
-  menu.addSectionHeader("Groups and elements");
-  for (const auto& group : group_names_) {
-    PopupMenu group_menu;
-    const auto found = group_sections_.find(group);
-    if (found != group_sections_.end()) {
-      for (int i = 0; i < found->second.size(); ++i) {
-        const String section = found->second[i];
-        const int section_index = section_names_.indexOf(section);
-        if (section_index >= 0)
-          group_menu.addItem(1000 + section_index, accessibleSectionTitle(section), true, section == last_section_name);
-      }
-    }
-    menu.addSubMenu(group, group_menu, true);
-  }
-
+  menu.addSectionHeader("Editor");
+  menu.addItem(1, "Save patch as default");
+  menu.addItem(2, "Initialize patch");
+  menu.addItem(3, "Save patch as...");
   menu.addSeparator();
-  menu.addSectionHeader("Presets");
-  menu.addItem(30, "Go to presets");
-  menu.addItem(31, "Load selected preset");
-  menu.addItem(32, "Refresh preset list");
-  menu.addItem(33, "Open preset file");
-  menu.addItem(34, "Import bank");
-  menu.addItem(35, "Save to user presets");
-  menu.addItem(36, "Save preset as");
-  menu.addItem(37, "Export folder as bank");
-
-  menu.addSeparator();
-  menu.addSectionHeader("Routing");
-  menu.addItem(10, "Go to signal routing");
-  menu.addItem(11, "Apply default routing");
-  menu.addItem(12, "Route filters serial, 1 into 2");
-  menu.addItem(13, "Route filters serial, 2 into 1");
-
-  menu.addSeparator();
-  menu.addSectionHeader("Effects");
-  menu.addItem(20, "Go to effects chain");
+  menu.addItem(4, "Accessibility settings");
 
   menu.showMenuAsync(PopupMenu::Options().withTargetComponent(menu_button_),
                      [this](int result) {
-    if (result >= 1000) {
-      if (isPositiveAndBelow(result - 1000, section_names_.size()))
-        selectSectionByName(section_names_[result - 1000], true);
-      return;
-    }
-    if (result == 10) {
-      selectSectionByName(kSignalRoutingSection, true);
-      return;
-    }
-    if (result == 11) {
-      applyRoutingPreset(3);
-      return;
-    }
-    if (result == 12) {
-      applyRoutingPreset(1);
-      return;
-    }
-    if (result == 13) {
-      applyRoutingPreset(2);
-      return;
-    }
-    if (result == 20)
-      selectSectionByName(kEffectsChainSection, true);
-    if (result == 30)
-      selectSectionByName(kPresetSection, true);
-    if (result == 31)
-      loadSelectedPreset();
-    if (result == 32)
-      refreshPresetList();
-    if (result == 33)
-      choosePresetFile();
-    if (result == 34)
-      chooseBankFile();
-    if (result == 35)
-      savePresetToUserDirectory();
-    if (result == 36)
+    if (result == 1)
+      savePatchAsDefault();
+    else if (result == 2)
+      initializePatch();
+    else if (result == 3)
       savePresetAs();
-    if (result == 37)
-      chooseFolderToExportBank();
+    else if (result == 4)
+      showAccessibilitySettingsMenu();
   });
 }
+
+void SynthEditor::showAccessibilitySettingsMenu() {
+  auto& settings = accessibilitySpeechSettings();
+  PopupMenu menu;
+  menu.addSectionHeader("Speech feedback");
+  menu.addItem(1, "Use speech feedback: " + onOff(settings.speech_feedback), true, settings.speech_feedback);
+  menu.addSeparator();
+  menu.addItem(2, "Navigation announcements: " + onOff(settings.navigation), true, settings.navigation);
+  menu.addItem(3, "Preset announcements: " + onOff(settings.presets), true, settings.presets);
+  menu.addItem(4, "LFO editor announcements: " + onOff(settings.lfo_editor), true, settings.lfo_editor);
+  menu.addItem(5, "Wavetable editor announcements: " + onOff(settings.wavetable_editor), true,
+               settings.wavetable_editor);
+  menu.addItem(6, "Sample and granular announcements: " + onOff(settings.sample_browser), true,
+               settings.sample_browser);
+  menu.addItem(7, "Modulation announcements: " + onOff(settings.modulation), true, settings.modulation);
+  menu.addItem(8, "Parameter value announcements: " + onOff(settings.parameters), true, settings.parameters);
+  menu.addItem(9, "Other announcements: " + onOff(settings.other), true, settings.other);
+
+  menu.showMenuAsync(PopupMenu::Options().withTargetComponent(menu_button_),
+                     [this](int result) {
+    auto& settings = accessibilitySpeechSettings();
+    if (result == 1)
+      settings.speech_feedback = !settings.speech_feedback;
+    else if (result == 2)
+      settings.navigation = !settings.navigation;
+    else if (result == 3)
+      settings.presets = !settings.presets;
+    else if (result == 4)
+      settings.lfo_editor = !settings.lfo_editor;
+    else if (result == 5)
+      settings.wavetable_editor = !settings.wavetable_editor;
+    else if (result == 6)
+      settings.sample_browser = !settings.sample_browser;
+    else if (result == 7)
+      settings.modulation = !settings.modulation;
+    else if (result == 8)
+      settings.parameters = !settings.parameters;
+    else if (result == 9)
+      settings.other = !settings.other;
+
+    if (result > 0) {
+      saveAccessibilitySpeechSettings();
+      if (settings.speech_feedback)
+        AccessibilityHandler::postAnnouncement("Accessibility settings updated",
+                                               AccessibilityHandler::AnnouncementPriority::medium);
+    }
+  });
+}
+
+File SynthEditor::defaultPatchFile() const {
+  return LoadSave::getUserPresetDirectory().getChildFile("Default").withFileExtension(vital::kPresetExtension);
+}
+
+void SynthEditor::initializePatch() {
+  const String parameter_id = focusedParameterId();
+  const String accessible_title = focusedAccessibleTitle();
+  auto* persistent_focus = persistentFocusedComponent();
+  const File default_file = defaultPatchFile();
+  std::string error;
+  if (default_file.existsAsFile() && synth_.loadFromFile(default_file, error)) {
+    last_preset_path = default_file.getFullPathName();
+    synth_.updateHostDisplay();
+    updateFullGui();
+    selectPresetFile(default_file);
+    updatePresetSummary();
+    restoreFocusAfterRebuild(parameter_id, persistent_focus, accessible_title);
+    postPluginAnnouncement("Loaded default patch", AccessibilityHandler::AnnouncementPriority::high);
+    return;
+  }
+
+  synth_.loadInitPreset();
+  synth_.updateHostDisplay();
+  updateFullGui();
+  refreshPresetList();
+  restoreFocusAfterRebuild(parameter_id, persistent_focus, accessible_title);
+  postPluginAnnouncement("Initialized patch", AccessibilityHandler::AnnouncementPriority::high);
+}
+
+void SynthEditor::savePatchAsDefault() {
+  const File destination = defaultPatchFile().withFileExtension(vital::kPresetExtension);
+  if (!synth_.saveCopyToFile(destination)) {
+    NativeMessageBox::showMessageBoxAsync(MessageBoxIconType::WarningIcon, "Unable to save default patch",
+                                          "The default patch could not be written.");
+    postPluginAnnouncement("Unable to save default patch", AccessibilityHandler::AnnouncementPriority::high);
+    return;
+  }
+
+  refreshPresetList();
+  updatePresetSummary();
+  postPluginAnnouncement("Saved patch as default", AccessibilityHandler::AnnouncementPriority::high);
+}
+
 
 void SynthEditor::rebuildFocusOrder() {
   focus_order_.clear();
@@ -4839,7 +4967,8 @@ void SynthEditor::updatePresetSummary() {
                          (preset_bank_.getText().isEmpty() ? kAllBanks : preset_bank_.getText()) +
                          ". Category: " +
                          (preset_category_.getText().isEmpty() ? kAllCategories : preset_category_.getText()) +
-                         ". Preview is " + (preset_preview_.getToggleState() ? "on." : "off.");
+                         ". Autoload preset when scrolling is " +
+                         (preset_preview_.getToggleState() ? "on." : "off.");
   preset_summary_.setText(summary, dontSendNotification);
   preset_summary_.setDescription(summary);
   if (auto* handler = preset_summary_.getAccessibilityHandler())
@@ -4849,23 +4978,18 @@ void SynthEditor::updatePresetSummary() {
 void SynthEditor::showPresetMenu() {
   PopupMenu menu;
   menu.addSectionHeader("Preset actions");
-  menu.addItem(1, "Load selected preset");
   menu.addItem(2, "Refresh preset list");
   menu.addSeparator();
   menu.addItem(3, "Open preset file...");
   menu.addItem(4, "Import bank...");
   menu.addItem(8, "Export folder as bank...");
   menu.addSeparator();
-  menu.addItem(5, "Save to user presets");
-  menu.addItem(6, "Save preset as...");
-  menu.addSeparator();
-  menu.addItem(7, preset_preview_.getToggleState() ? "Turn preview off" : "Turn preview on");
+  menu.addItem(7, preset_preview_.getToggleState() ? "Turn autoload preset when scrolling off"
+                                                   : "Turn autoload preset when scrolling on");
 
   menu.showMenuAsync(PopupMenu::Options().withTargetComponent(preset_menu_),
                      [this](int result) {
-    if (result == 1)
-      loadSelectedPreset();
-    else if (result == 2)
+    if (result == 2)
       refreshPresetList();
     else if (result == 3)
       choosePresetFile();
@@ -4873,15 +4997,13 @@ void SynthEditor::showPresetMenu() {
       chooseBankFile();
     else if (result == 8)
       chooseFolderToExportBank();
-    else if (result == 5)
-      savePresetToUserDirectory();
-    else if (result == 6)
-      savePresetAs();
     else if (result == 7) {
       preset_preview_.setToggleState(!preset_preview_.getToggleState(), sendNotificationSync);
     }
   });
 }
+
+
 
 void SynthEditor::selectPresetFile(const File& file) {
   if (!file.existsAsFile())
@@ -4899,6 +5021,7 @@ void SynthEditor::selectPresetFile(const File& file) {
   }
   filterPresetList();
 }
+
 
 void SynthEditor::loadSelectedPreset() {
   const int index = preset_selector_.getSelectedItemIndex();
@@ -4937,7 +5060,7 @@ void SynthEditor::loadPresetFile(const File& file, bool preview) {
   selectPresetFile(file);
   updatePresetSummary();
   restoreFocusAfterRebuild(parameter_id, persistent_focus, accessible_title);
-  postPluginAnnouncement((preview ? "Previewing preset " : "Loaded preset ") +
+  postPluginAnnouncement((preview ? "Autoloaded preset " : "Loaded preset ") +
                                            file.getFileNameWithoutExtension(),
                                          preview ? AccessibilityHandler::AnnouncementPriority::medium
                                                  : AccessibilityHandler::AnnouncementPriority::high);
