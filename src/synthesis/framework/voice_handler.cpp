@@ -154,7 +154,10 @@ namespace vital {
 
           if (!legato_ || voice->last_key_state() != Voice::kHeld || voice->state().event != kVoiceOn)
             retrigger_.trigger(mask, voice->state().event, offset);
-          modulation_retrigger_.trigger(mask, voice->state().event, offset);
+          bool mono_legato_note_on = legato_ && polyphony_ == 1 && voice->last_key_state() == Voice::kHeld &&
+                                     voice->state().event == kVoiceOn;
+          if (!mono_legato_note_on)
+            modulation_retrigger_.trigger(mask, voice->state().event, offset);
 
           voice->completeVoiceEvent();
         }
