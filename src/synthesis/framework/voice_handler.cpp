@@ -62,7 +62,7 @@ namespace vital {
   } // namespace
 
   Voice::Voice(AggregateVoice* parent) : voice_index_(0), voice_mask_(0), event_sample_(-1),
-      adjacent_same_note_retrigger_(false),
+      adjacent_note_retrigger_(false),
       aftertouch_sample_(-1), aftertouch_(0.0f), slide_sample_(-1), slide_(0.0f), parent_(parent) {
     state_.event = kVoiceOff;
     state_.midi_note = 0;
@@ -144,7 +144,7 @@ namespace vital {
             channel_.trigger(mask, voice->state().channel, offset);
 
             if (voice->last_key_state() == Voice::kDead ||
-                (voice->last_key_state() == Voice::kReleased && !voice->adjacentSameNoteRetrigger()))
+                (voice->last_key_state() == Voice::kReleased && !voice->adjacentNoteRetrigger()))
               reset_.trigger(mask, kVoiceOn, offset);
           }
           else if (voice->state().event == kVoiceOff)
