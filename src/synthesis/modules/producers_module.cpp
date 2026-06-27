@@ -260,5 +260,6 @@ namespace vital {
       addZonedBuffer(bus3_output, granular, granular_zone_mask, num_samples);
     if (granular_direct_out)
       addZonedBuffer(direct_output, granular, granular_zone_mask, num_samples);
+
   }
 } // namespace vital

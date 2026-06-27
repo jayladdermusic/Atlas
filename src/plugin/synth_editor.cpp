@@ -57,6 +57,7 @@ namespace {
     bool modulation = true;
     bool parameters = false;
     bool other = false;
+    bool frequency_values_in_hz = false;
   };
 
   AccessibilitySpeechSettings& accessibilitySpeechSettings() {
@@ -79,6 +80,7 @@ namespace {
         settings.modulation = loadBool("modulation", settings.modulation);
         settings.parameters = loadBool("parameters", settings.parameters);
         settings.other = loadBool("other", settings.other);
+        settings.frequency_values_in_hz = loadBool("frequency_values_in_hz", settings.frequency_values_in_hz);
       }
     }
     return settings;
@@ -97,6 +99,7 @@ namespace {
     data["modulation"] = settings.modulation;
     data["parameters"] = settings.parameters;
     data["other"] = settings.other;
+    data["frequency_values_in_hz"] = settings.frequency_values_in_hz;
     config["accessibility_speech"] = data;
     LoadSave::saveJsonToConfig(config);
   }
@@ -111,6 +114,138 @@ namespace {
         return true;
     }
     return false;
+  }
+
+  String compactFloat(float value, int decimals) {
+    String result(value, decimals);
+    if (result.containsChar('.')) {
+      while (result.endsWithChar('0'))
+        result = result.dropLastCharacters(1);
+      if (result.endsWithChar('.'))
+        result = result.dropLastCharacters(1);
+    }
+    return result;
+  }
+
+  String formatHz(float frequency) {
+    frequency = std::max(0.0f, frequency);
+    const int decimals = frequency < 10.0f ? 2 : (frequency < 100.0f ? 1 : 0);
+    return compactFloat(frequency, decimals) + " Hz";
+  }
+
+  bool parseNoteNameToMidi(const String& text, float& midi_note) {
+    String note = text.trim().removeCharacters(" ");
+    if (note.isEmpty())
+      return false;
+
+    note = note.toLowerCase();
+    if (note.endsWith("hz"))
+      return false;
+
+    const juce_wchar root = note[0];
+    int semitone = 0;
+    switch (root) {
+      case 'c': semitone = 0; break;
+      case 'd': semitone = 2; break;
+      case 'e': semitone = 4; break;
+      case 'f': semitone = 5; break;
+      case 'g': semitone = 7; break;
+      case 'a': semitone = 9; break;
+      case 'b': semitone = 11; break;
+      default: return false;
+    }
+
+    int index = 1;
+    if (note.substring(index).startsWith("sharp")) {
+      semitone += 1;
+      index += 5;
+    }
+    else if (note.substring(index).startsWith("flat")) {
+      semitone -= 1;
+      index += 4;
+    }
+    else if (index < note.length() && note[index] == '#') {
+      semitone += 1;
+      ++index;
+    }
+    else if (index < note.length() && note[index] == 'b') {
+      semitone -= 1;
+      ++index;
+    }
+
+    const String octave_text = note.substring(index);
+    if (octave_text.isEmpty())
+      return false;
+
+    bool valid_octave = true;
+    for (int i = 0; i < octave_text.length(); ++i) {
+      const juce_wchar c = octave_text[i];
+      if (!((c >= '0' && c <= '9') || (i == 0 && c == '-'))) {
+        valid_octave = false;
+        break;
+      }
+    }
+    if (!valid_octave)
+      return false;
+
+    const int octave = octave_text.getIntValue();
+    while (semitone < 0)
+      semitone += 12;
+    semitone %= 12;
+    midi_note = static_cast<float>((octave + 1) * 12 + semitone);
+    return true;
+  }
+
+  bool isSemitoneFrequencyParameter(const String& parameter_id, const vital::ValueDetails& details) {
+    if (details.string_lookup != nullptr || details.value_scale != vital::ValueDetails::kLinear)
+      return false;
+
+    const String id = parameter_id.toLowerCase();
+    const String display = String(details.display_name).toLowerCase();
+    const bool frequency_name = id.contains("cutoff") || display.contains("cutoff") ||
+                                display.contains("low cut") || display.contains("high cut") ||
+                                id.endsWith("_center") || display.endsWith(" center");
+    if (!frequency_name)
+      return false;
+
+    return details.min >= 0.0f && details.max >= 120.0f && details.max <= 140.0f;
+  }
+
+  String accessibleParameterText(const ValueBridge& bridge, double normalized_value) {
+    const auto& settings = accessibilitySpeechSettings();
+    if (settings.frequency_values_in_hz &&
+        isSemitoneFrequencyParameter(bridge.getParameterId(), bridge.getDetails())) {
+      const float midi_note = bridge.convertToEngineValue(static_cast<float>(normalized_value));
+      return formatHz(vital::utils::midiNoteToFrequency(midi_note));
+    }
+
+    return bridge.getText(static_cast<float>(normalized_value), 128);
+  }
+
+  double accessibleParameterValueForText(const ValueBridge& bridge, const String& text) {
+    const auto& settings = accessibilitySpeechSettings();
+    if (isSemitoneFrequencyParameter(bridge.getParameterId(), bridge.getDetails())) {
+      const String trimmed = text.trim();
+      if (trimmed.isNotEmpty()) {
+        float midi_note = 0.0f;
+        if (parseNoteNameToMidi(trimmed, midi_note)) {
+          const auto& details = bridge.getDetails();
+          return bridge.convertToPluginValue(jlimit(details.min, details.max, midi_note));
+        }
+        if (settings.frequency_values_in_hz) {
+          const float frequency = trimmed.removeCharacters(" ").toLowerCase()
+                                         .removeCharacters("hz")
+                                         .getFloatValue();
+          if (frequency > 0.0f) {
+            midi_note = vital::utils::frequencyToMidiNote(frequency);
+            const auto& details = bridge.getDetails();
+            return bridge.convertToPluginValue(jlimit(details.min, details.max, midi_note));
+          }
+        }
+      }
+    }
+
+    return static_cast<double>(bridge.getValueForText(text));
   }
 
   bool shouldPostPluginAnnouncement(const String& message) {
@@ -625,7 +760,7 @@ namespace {
   }
 
   int sectionRank(const String& section) {
-    static const std::array<const char*, 51> order = {{
+    static const std::array<const char*, 54> order = {{
       "Master and global",
       kPresetSection,
       "Voice and performance",
@@ -667,7 +802,10 @@ namespace {
       "LFO 6",
       "LFO 7",
       "LFO 8",
-      "Random modulation",
+      "Random 1",
+      "Random 2",
+      "Random 3",
+      "Random 4",
       "Macros",
       "Modulation routing",
       "Zones - Oscillator 1",
@@ -711,7 +849,7 @@ namespace {
       return "Envelopes";
     if (section.startsWith("LFO "))
       return "LFOs";
-    if (section == "Random modulation")
+    if (section.startsWith("Random "))
       return "Random modulation";
     if (section == "Macros")
       return "Macros";
@@ -908,6 +1046,31 @@ namespace {
           return 4600 + i;
       }
       return 4690;
+    }
+
+    for (int random = 1; random <= vital::kNumRandomLfos; ++random) {
+      const String prefix = "random_" + String(random) + "_";
+      if (!id.startsWith(prefix))
+        continue;
+
+      const String suffix = id.fromFirstOccurrenceOf(prefix, false, false);
+      static const std::array<const char*, 8> random_order = {{
+        "style",
+        "frequency",
+        "rate_x10",
+        "sync",
+        "tempo",
+        "sync_type",
+        "stereo",
+        "keytrack_transpose",
+      }};
+      for (int i = 0; i < static_cast<int>(random_order.size()); ++i) {
+        if (suffix == random_order[i])
+          return 7000 + random * 100 + i;
+      }
+      if (suffix == "keytrack_tune")
+        return 7000 + random * 100 + 8;
+      return 7000 + random * 100 + 90;
     }
 
     const int modulation_slot = modulationSlotForParameterId(id);
@@ -1148,7 +1311,14 @@ namespace {
         return "LFO " + String(lfo);
       return "LFO 1";
     }
-    if (id.startsWith("random_")) return "Random modulation";
+    if (id.startsWith("random_")) {
+      const String number = id.fromFirstOccurrenceOf("random_", false, false)
+                              .upToFirstOccurrenceOf("_", false, false);
+      const int random = number.getIntValue();
+      if (random > 0)
+        return "Random " + String(random);
+      return "Random 1";
+    }
     if (id.startsWith("modulation_")) return "Modulation routing";
     if (id.startsWith("chorus_")) return "Chorus";
     if (id.startsWith("compressor_")) return "Compressor";
@@ -1196,6 +1366,27 @@ namespace {
     if (id == "note") return "Note";
     if (id == "stereo") return "Stereo voice split";
     return readableId(id);
+  }
+
+  bool isInvalidModulationPair(const String& source_id, const String& destination_id) {
+    if (source_id.isEmpty() || destination_id.isEmpty())
+      return false;
+
+    const StringArray self_modulating_prefixes { "lfo_", "env_", "random_" };
+    for (const auto& prefix : self_modulating_prefixes) {
+      if (!source_id.startsWith(prefix))
+        continue;
+
+      const String source_number = source_id.fromFirstOccurrenceOf(prefix, false, false)
+                                       .upToFirstOccurrenceOf("_", false, false);
+      if (source_number.isEmpty())
+        continue;
+
+      const String destination_prefix = prefix + source_number + "_";
+      if (destination_id.startsWith(destination_prefix))
+        return true;
+    }
+    return false;
   }
 
   int modulationSlotForParameterId(const String& id) {
@@ -1248,6 +1439,26 @@ namespace {
   bool isContextMenuKey(const KeyPress& key) {
     return !key.getModifiers().isAnyModifierKeyDown() &&
            (key.getKeyCode() == ']' || key.getTextCharacter() == ']');
+  }
+
+  bool isEffectMoveEarlierKey(const KeyPress& key) {
+    const ModifierKeys modifiers = key.getModifiers();
+    const bool allowed_modifiers = !modifiers.isAnyModifierKeyDown() ||
+                                   (modifiers.isShiftDown() && !modifiers.isCommandDown() &&
+                                    !modifiers.isCtrlDown() && !modifiers.isAltDown());
+    const juce_wchar character = key.getTextCharacter();
+    return allowed_modifiers &&
+           (key.getKeyCode() == '[' || character == '[' || character == '{');
+  }
+
+  bool isEffectMoveLaterKey(const KeyPress& key) {
+    const ModifierKeys modifiers = key.getModifiers();
+    const bool allowed_modifiers = !modifiers.isAnyModifierKeyDown() ||
+                                   (modifiers.isShiftDown() && !modifiers.isCommandDown() &&
+                                    !modifiers.isCtrlDown() && !modifiers.isAltDown());
+    const juce_wchar character = key.getTextCharacter();
+    return allowed_modifiers &&
+           (key.getKeyCode() == ']' || character == ']' || character == '}');
   }
 
   int macroIndexForControlId(const String& id) {
@@ -2100,9 +2311,13 @@ class AccessibleParameterRow : public Component {
         slider_.textFromValueFunction = [this](double value) {
           if (text_from_value_)
             return text_from_value_(value);
+          if (auto* bridge = dynamic_cast<ValueBridge*>(&parameter_))
+            return accessibleParameterText(*bridge, value);
           return parameter_.getText(static_cast<float>(value), 128);
         };
         slider_.valueFromTextFunction = [this](const String& text) {
+          if (auto* bridge = dynamic_cast<ValueBridge*>(&parameter_))
+            return accessibleParameterValueForText(*bridge, text);
           return static_cast<double>(parameter_.getValueForText(text));
         };
         slider_.onDragStart = [this] { parameter_.beginChangeGesture(); };
@@ -2123,6 +2338,22 @@ class AccessibleParameterRow : public Component {
       updateAccessibleCommand();
     }
 
+    void setModulationSourceSubmenuCallback(
+        std::function<PopupMenu(const String&, std::map<int, String>&, int)> callback) {
+      modulation_source_submenu_callback_ = std::move(callback);
+      updateAccessibleCommand();
+    }
+
+    void setModulationAssignCallback(std::function<void(const String&, const String&, Component&)> callback) {
+      modulation_assign_callback_ = std::move(callback);
+      updateAccessibleCommand();
+    }
+
+    void setModulationEditCallback(std::function<void(const String&, const String&, Component&)> callback) {
+      modulation_edit_callback_ = std::move(callback);
+      updateAccessibleCommand();
+    }
+
     void setMidiLearnCallback(std::function<void(const String&, Component&, bool)> callback) {
       midi_learn_callback_ = std::move(callback);
       updateAccessibleCommand();
@@ -2130,6 +2361,13 @@ class AccessibleParameterRow : public Component {
 
     void setModulationDestinationPredicate(std::function<bool(const String&)> predicate) {
       is_modulation_destination_ = std::move(predicate);
+      updateAccessibleCommand();
+    }
+
+    void setModulationRemovalCallbacks(std::function<std::vector<std::pair<String, String>>(const String&)> sources,
+                                       std::function<void(const String&, const String&, Component&)> remove) {
+      modulation_removal_sources_callback_ = std::move(sources);
+      modulation_remove_callback_ = std::move(remove);
       updateAccessibleCommand();
     }
 
@@ -2154,6 +2392,23 @@ class AccessibleParameterRow : public Component {
       else
         slider_.setValue(jlimit(min_normalized_value_, max_normalized_value_,
                                 static_cast<double>(parameter_.getValue())), dontSendNotification);
+    }
+
+    void setAccessibleName(const String& name, const String& description = {}) {
+      if (name.isEmpty())
+        return;
+
+      if (focusableControl()->getTitle() == name)
+        return;
+
+      label_.setText(name, dontSendNotification);
+      label_.setTitle(name + " label");
+      focusableControl()->setTitle(name);
+      if (description.isNotEmpty())
+        focusableControl()->setDescription(description);
+      if (auto* handler = focusableControl()->getAccessibilityHandler())
+        handler->notifyAccessibilityEvent(AccessibilityEvent::titleChanged);
+      repaint();
     }
 
     Component* focusableControl() {
@@ -2188,10 +2443,15 @@ class AccessibleParameterRow : public Component {
       kContextClearMidi,
       kContextRenameMacro,
       kContextToggleBipolar,
+      kContextAddModulationBase = 1000,
+      kContextEditModulationBase = 2000,
+      kContextRemoveModulationBase = 3000,
     };
 
     bool canAddModulation(const String& parameter_id) const {
-      if (!modulation_menu_callback_ || parameter_id.isEmpty())
+      if (parameter_id.isEmpty())
+        return false;
+      if (!modulation_menu_callback_ && !(modulation_source_submenu_callback_ && modulation_assign_callback_))
         return false;
       return !is_modulation_destination_ || is_modulation_destination_(parameter_id);
     }
@@ -2204,14 +2464,32 @@ class AccessibleParameterRow : public Component {
 
       const bool is_toggle = parameter_.isBoolean();
       const int macro_index = macroIndexForControlId(parameter_id);
+      const auto removable_modulations = modulation_removal_sources_callback_
+          ? modulation_removal_sources_callback_(parameter_id)
+          : std::vector<std::pair<String, String>>();
 
       PopupMenu menu;
+      std::map<int, String> add_modulation_choices;
       menu.addSectionHeader(parameter_.getName(128));
       if (!is_toggle && slider_.onTextEntryCommand)
         menu.addItem(kContextTypeValue, "Type a value\xe2\x80\xa6");
       menu.addItem(kContextResetDefault, "Reset to default");
-      if (canAddModulation(parameter_id))
-        menu.addItem(kContextAddModulation, "Add modulation source\xe2\x80\xa6");
+      if (canAddModulation(parameter_id)) {
+        if (modulation_source_submenu_callback_) {
+          PopupMenu add_menu = modulation_source_submenu_callback_(parameter_id, add_modulation_choices,
+                                                                   kContextAddModulationBase);
+          menu.addSubMenu("Add modulation source", add_menu, !add_modulation_choices.empty());
+        }
+        else {
+          menu.addItem(kContextAddModulation, "Add modulation source\xe2\x80\xa6");
+        }
+      }
+      for (int i = 0; i < static_cast<int>(removable_modulations.size()); ++i)
+        menu.addItem(kContextEditModulationBase + i,
+                     "Edit modulation from " + removable_modulations[static_cast<size_t>(i)].second);
+      for (int i = 0; i < static_cast<int>(removable_modulations.size()); ++i)
+        menu.addItem(kContextRemoveModulationBase + i,
+                     "Remove modulation from " + removable_modulations[static_cast<size_t>(i)].second);
       if (midi_learn_callback_) {
         menu.addItem(kContextMidiLearn, "MIDI learn");
         menu.addItem(kContextClearMidi, "Clear MIDI learn");
@@ -2223,10 +2501,37 @@ class AccessibleParameterRow : public Component {
 
       Component::SafePointer<Component> safe_target(&target);
       menu.showMenuAsync(PopupMenu::Options().withTargetComponent(&target),
-                         [this, parameter_id, safe_target](int result) {
+                         [this, parameter_id, removable_modulations, add_modulation_choices, safe_target](int result) {
         Component* invoked = safe_target.getComponent();
         if (invoked == nullptr)
           return;
+
+        const auto add_found = add_modulation_choices.find(result);
+        if (add_found != add_modulation_choices.end()) {
+          if (modulation_assign_callback_)
+            modulation_assign_callback_(add_found->second, parameter_id, *invoked);
+          return;
+        }
+
+        if (result >= kContextEditModulationBase &&
+            result < kContextEditModulationBase + static_cast<int>(removable_modulations.size())) {
+          const int index = result - kContextEditModulationBase;
+          if (modulation_edit_callback_ &&
+              isPositiveAndBelow(index, static_cast<int>(removable_modulations.size())))
+            modulation_edit_callback_(removable_modulations[static_cast<size_t>(index)].first,
+                                      parameter_id, *invoked);
+          return;
+        }
+
+        if (result >= kContextRemoveModulationBase &&
+            result < kContextRemoveModulationBase + static_cast<int>(removable_modulations.size())) {
+          const int index = result - kContextRemoveModulationBase;
+          if (modulation_remove_callback_ &&
+              isPositiveAndBelow(index, static_cast<int>(removable_modulations.size())))
+            modulation_remove_callback_(removable_modulations[static_cast<size_t>(index)].first,
+                                        parameter_id, *invoked);
+          return;
+        }
 
         switch (result) {
           case kContextTypeValue:
@@ -2271,9 +2576,11 @@ class AccessibleParameterRow : public Component {
       parameter_.setValueNotifyingHost(default_value);
       parameter_.endChangeGesture();
       refresh();
-      postPluginAnnouncement(parameter_.getName(128) + " reset to " +
-                                             parameter_.getText(parameter_.getValue(), 128),
-                                             AccessibilityHandler::AnnouncementPriority::high);
+      String value_text = parameter_.getText(parameter_.getValue(), 128);
+      if (auto* bridge = dynamic_cast<ValueBridge*>(&parameter_))
+        value_text = accessibleParameterText(*bridge, parameter_.getValue());
+      postPluginAnnouncement(parameter_.getName(128) + " reset to " + value_text,
+                             AccessibilityHandler::AnnouncementPriority::high);
     }
 
     AudioProcessorParameter& parameter_;
@@ -2282,7 +2589,12 @@ class AccessibleParameterRow : public Component {
     OffscreenToggleButton toggle_;
     std::function<String(double)> text_from_value_;
     std::function<void(const String&, Component&)> modulation_menu_callback_;
+    std::function<PopupMenu(const String&, std::map<int, String>&, int)> modulation_source_submenu_callback_;
+    std::function<void(const String&, const String&, Component&)> modulation_assign_callback_;
+    std::function<void(const String&, const String&, Component&)> modulation_edit_callback_;
     std::function<bool(const String&)> is_modulation_destination_;
+    std::function<std::vector<std::pair<String, String>>(const String&)> modulation_removal_sources_callback_;
+    std::function<void(const String&, const String&, Component&)> modulation_remove_callback_;
     std::function<void(const String&, Component&, bool)> midi_learn_callback_;
     std::function<bool(const String&, const KeyPress&, Component&)> extra_command_callback_;
     double min_normalized_value_ = 0.0;
@@ -2300,8 +2612,8 @@ class AccessibleParameterRow : public Component {
         if (extra_command_callback_ && extra_command_callback_(parameter_id, key, target))
           return true;
 
-        if (isModulationMenuKey(key) && canAddModulation(parameter_id)) {
-          modulation_menu_callback_(parameter_id, target);
+        if (isModulationMenuKey(key)) {
+          showContextMenu(target);
           return true;
         }
 
@@ -2325,6 +2637,8 @@ class AccessibleParameterRow : public Component {
 
 class AccessibleSectionHeader : public Component {
   public:
+    std::function<bool(const KeyPress&, Component&)> onKeyCommand;
+
     AccessibleSectionHeader(const String& title, int groupRank, bool topLevel, const String& sectionKey = {}) :
         title_(title), top_level_(topLevel) {
       setTitle(title_);
@@ -2348,6 +2662,12 @@ class AccessibleSectionHeader : public Component {
                  Justification::centredLeft, true);
     }
 
+    bool keyPressed(const KeyPress& key) override {
+      if (onKeyCommand && onKeyCommand(key, *this))
+        return true;
+      return Component::keyPressed(key);
+    }
+
     std::unique_ptr<AccessibilityHandler> createAccessibilityHandler() override {
       class HeaderAccessibilityHandler final : public AccessibilityHandler {
         public:
@@ -2368,6 +2688,18 @@ class AccessibleSectionHeader : public Component {
     void addAccessibleChild(Component* component) {
       if (component != nullptr)
         child_focus_order_.push_back(component);
+    }
+
+    void setHeaderTitle(const String& title) {
+      if (title.isEmpty() || title == title_)
+        return;
+
+      title_ = title;
+      setTitle(title_);
+      setDescription(top_level_ ? "Control group " + title_ : "Control section " + title_);
+      if (auto* handler = getAccessibilityHandler())
+        handler->notifyAccessibilityEvent(AccessibilityEvent::titleChanged);
+      repaint();
     }
 
     int headerHeight() const { return top_level_ ? 42 : 34; }
@@ -2734,6 +3066,10 @@ SynthEditor::SynthEditor(SynthPlugin& synth) :
   modulation_source_.setDescription("Choose an envelope, LFO, macro, MIDI source, or other modulation source");
   modulation_source_.setHelpText("Use Up and Down Arrow to choose a source");
   modulation_source_.setWantsKeyboardFocus(true);
+  modulation_source_.onChange = [this] {
+    if (!updating_modulation_destinations_)
+      updateModulationDestinationList();
+  };
   addChildComponent(modulation_source_);
 
   modulation_destination_group_.setTitle("Destination group");
@@ -2988,6 +3324,19 @@ SynthEditor::SynthEditor(SynthPlugin& synth) :
 
   lfo_mseg_keyboard_.onKeyPressed = [this](const KeyPress& key) { return handleLfoMsegShortcut(key); };
   lfo_mseg_keyboard_.getStatusText = [this] { return lfoMsegStatusText(); };
+  auto handle_lfo_combo_point_shortcut = [this](const KeyPress& key) {
+    const juce_wchar character = CharacterFunctions::toLowerCase(key.getTextCharacter());
+    if (character == ',' || character == '.')
+      return handleLfoMsegShortcut(key);
+    return false;
+  };
+  lfo_mseg_lfo_.onKeyPressed = handle_lfo_combo_point_shortcut;
+  lfo_mseg_mode_.onKeyPressed = handle_lfo_combo_point_shortcut;
+  lfo_mseg_cycle_.onKeyPressed = handle_lfo_combo_point_shortcut;
+  lfo_mseg_grid_.onKeyPressed = handle_lfo_combo_point_shortcut;
+  lfo_mseg_shape_.onKeyPressed = handle_lfo_combo_point_shortcut;
+  lfo_mseg_point_.onKeyPressed = handle_lfo_combo_point_shortcut;
+  lfo_mseg_curve_.onKeyPressed = handle_lfo_combo_point_shortcut;
   addChildComponent(lfo_mseg_keyboard_);
 
   viewport_.setTitle("Section controls");
@@ -3178,9 +3527,42 @@ void SynthEditor::buildSections() {
   std::vector<String> names;
   for (const auto& section : sections_)
     names.push_back(section.first);
-  std::stable_sort(names.begin(), names.end(), [](const String& a, const String& b) {
-    const int rank_a = sectionRank(a);
-    const int rank_b = sectionRank(b);
+  auto dynamic_section_rank = [this](const String& section) {
+    const String effect_id = effectIdForSection(section);
+    if (effect_id.isEmpty())
+      return sectionRank(section);
+
+    int effect_index = -1;
+    for (int i = 0; i < vital::constants::kNumEffects; ++i) {
+      if (effect_id == String(strings::kEffectOrder[i])) {
+        effect_index = i;
+        break;
+      }
+    }
+    if (effect_index < 0)
+      return sectionRank(section);
+
+    int order[vital::constants::kNumEffects];
+    readEffectChainOrder(section, order);
+    int position = vital::constants::kNumEffects;
+    for (int i = 0; i < vital::constants::kNumEffects; ++i) {
+      if (order[i] == effect_index) {
+        position = i;
+        break;
+      }
+    }
+
+    if (section.startsWith("Bus 1 - "))
+      return 220 + sectionRank(kEffectsChainSection) + 1 + position;
+    if (section.startsWith("Bus 2 - "))
+      return 250 + sectionRank(kEffectsChainSection) + 1 + position;
+    if (section.startsWith("Bus 3 - "))
+      return 280 + sectionRank(kEffectsChainSection) + 1 + position;
+    return sectionRank(kEffectsChainSection) + 1 + position;
+  };
+  std::stable_sort(names.begin(), names.end(), [&](const String& a, const String& b) {
+    const int rank_a = dynamic_section_rank(a);
+    const int rank_b = dynamic_section_rank(b);
     if (rank_a != rank_b)
       return rank_a < rank_b;
     return a < b;
@@ -3387,6 +3769,45 @@ std::unique_ptr<AccessibleParameterRow> SynthEditor::createAccessibleParameterRo
         "Set the MIDI note that plays the loaded sample at its original pitch", true);
   }
 
+  if (parameter_id.startsWith("random_")) {
+    const String suffix = parameter_id.fromFirstOccurrenceOf("random_", false, false)
+                                      .fromFirstOccurrenceOf("_", false, false);
+    if (suffix == "style")
+      return std::make_unique<AccessibleParameterRow>(parameter, "Style");
+    if (suffix == "frequency")
+      return std::make_unique<AccessibleParameterRow>(parameter, "Rate");
+    if (suffix == "rate_x10")
+      return std::make_unique<AccessibleParameterRow>(
+          parameter, "10x rate",
+          [bridge](double value) { return bridge->getText(static_cast<float>(value), 128); }, 1.0, 0.0,
+          String(), String(),
+          "Multiply this random LFO rate by ten", true);
+    if (suffix == "sync")
+      return std::make_unique<AccessibleParameterRow>(
+          parameter, "Tempo sync type",
+          [bridge](double value) { return bridge->getText(static_cast<float>(value), 128); }, 1.0, 0.0,
+          String(), String(),
+          "Choose seconds, tempo, dotted tempo, triplet tempo, or keytrack timing", true);
+    if (suffix == "tempo")
+      return std::make_unique<AccessibleParameterRow>(parameter, "Tempo");
+    if (suffix == "sync_type")
+      return std::make_unique<AccessibleParameterRow>(
+          parameter, "Transport sync",
+          [](double value) { return value >= 0.5 ? "Host synced" : "Free running"; }, 1.0, 0.0,
+          String(), String(),
+          "Choose whether the random LFO follows host transport sync or runs freely", true);
+    if (suffix == "stereo")
+      return std::make_unique<AccessibleParameterRow>(
+          parameter, "Stereo mode",
+          [](double value) { return value >= 0.5 ? "Independent stereo" : "Mono"; }, 1.0, 0.0,
+          String(), String(),
+          "Choose whether random values are shared or independent between stereo channels", true);
+    if (suffix == "keytrack_transpose")
+      return std::make_unique<AccessibleParameterRow>(parameter, "Keytrack transpose");
+    if (suffix == "keytrack_tune")
+      return std::make_unique<AccessibleParameterRow>(parameter, "Keytrack tune");
+  }
+
   if (parameter_id == "filter_1_filter_input") {
     return std::make_unique<AccessibleParameterRow>(
         parameter, "Filter 1 input from Filter 2",
@@ -3560,6 +3981,11 @@ Component* SynthEditor::persistentFocusedComponent() const {
   if (focused == nullptr)
     return nullptr;
 
+  for (Component* component = focused; component != nullptr; component = component->getParentComponent()) {
+    if (component == &rows_container_)
+      return nullptr;
+  }
+
   for (const auto& row : rows_) {
     if (row != nullptr && row->focusableControl() == focused)
       return nullptr;
@@ -3568,7 +3994,7 @@ Component* SynthEditor::persistentFocusedComponent() const {
 }
 
 void SynthEditor::restoreFocusAfterRebuild(const String& parameterId, Component* persistentComponent,
-                                           const String& accessibleTitle) {
+                                           const String& accessibleTitle, const String& preferredSection) {
   Component* target = nullptr;
   if (parameterId.isNotEmpty()) {
     for (const auto& row : rows_) {
@@ -3581,6 +4007,19 @@ void SynthEditor::restoreFocusAfterRebuild(const String& parameterId, Component*
 
   if (target == nullptr && persistentComponent != nullptr && persistentComponent->isShowing())
     target = persistentComponent;
+
+  if (target == nullptr && accessibleTitle.isNotEmpty() && preferredSection.isNotEmpty()) {
+    for (auto* component : focus_order_) {
+      if (component == nullptr || !component->isShowing())
+        continue;
+      if (component->getProperties()["SectionName"].toString() != preferredSection)
+        continue;
+      if (component->getTitle() == accessibleTitle || component->getName() == accessibleTitle) {
+        target = component;
+        break;
+      }
+    }
+  }
 
   if (target == nullptr && accessibleTitle.isNotEmpty()) {
     for (auto* component : focus_order_) {
@@ -3888,7 +4327,22 @@ void SynthEditor::showSection(int index, bool announce) {
     row->setModulationMenuCallback([this](const String& destinationId, Component& target) {
       showModulationSourceMenuForParameter(destinationId, target);
     });
+    row->setModulationSourceSubmenuCallback([this](const String& destinationId,
+                                                   std::map<int, String>& choices, int firstItemId) {
+      return createModulationSourceSubmenu(destinationId, choices, firstItemId);
+    });
+    row->setModulationAssignCallback([this](const String& sourceId, const String& destinationId, Component& target) {
+      connectModulationAndPromptForAmount(sourceId, destinationId, target);
+    });
+    row->setModulationEditCallback([this](const String& sourceId, const String& destinationId, Component& target) {
+      promptForInitialModulationAmount(sourceId, destinationId, false, target);
+    });
     row->setModulationDestinationPredicate([this](const String& id) { return isModulationDestinationId(id); });
+    row->setModulationRemovalCallbacks(
+        [this](const String& destinationId) { return modulationSourcesForDestination(destinationId); },
+        [this](const String& sourceId, const String& destinationId, Component& target) {
+          removeModulationFromParameter(sourceId, destinationId, target);
+        });
     row->setMidiLearnCallback([this](const String& parameterId, Component&, bool clear) {
       if (clear) {
         synth_.clearMidiLearn(parameterId.toStdString());
@@ -3905,7 +4359,8 @@ void SynthEditor::showSection(int index, bool announce) {
       promptForParameterValue(parameterId, target);
     });
     row->setExtraCommandCallback([this](const String& parameterId, const KeyPress& key, Component& target) {
-      return handleMacroShortcut(parameterId, key, target);
+      return handleMacroShortcut(parameterId, key, target) ||
+             handleEffectShortcut(last_section_name, key, target);
     });
     row->setBounds(0, y, jmax(620, viewport_.getMaximumVisibleWidth()), 48);
     row->setExplicitFocusOrder(focus_order++);
@@ -3917,6 +4372,10 @@ void SynthEditor::showSection(int index, bool announce) {
 
   if (effect_chain_controls_visible_) {
     refreshEffectChainControls();
+    effect_chain_summary_.getProperties().set("SectionName", section_name);
+    effect_chain_selector_.getProperties().set("SectionName", section_name);
+    effect_move_up_.getProperties().set("SectionName", section_name);
+    effect_move_down_.getProperties().set("SectionName", section_name);
     effect_chain_summary_.setBounds(0, y, jmax(620, viewport_.getMaximumVisibleWidth()), 54);
     rows_container_.addAndMakeVisible(effect_chain_summary_);
     y += 60;
@@ -4015,6 +4474,11 @@ void SynthEditor::showAllSections(bool announce) {
         auto section_component = std::make_unique<AccessibleSectionHeader>(accessibleSectionTitle(section_name),
                                                                            groupRank(group), false, section_name);
         section_ptr = section_component.get();
+        if (effectIdForSection(section_name).isNotEmpty()) {
+          section_ptr->onKeyCommand = [this, section_name](const KeyPress& key, Component& target) {
+            return handleEffectShortcut(section_name, key, target);
+          };
+        }
         section_ptr->setExplicitFocusOrder(focus_order++);
         group_ptr->addAndMakeVisible(section_ptr);
         group_ptr->addAccessibleChild(section_ptr);
@@ -4030,6 +4494,7 @@ void SynthEditor::showAllSections(bool announce) {
 
           auto slot_component = std::make_unique<AccessibleSectionHeader>(title, groupRank(group), false);
           auto* slot_ptr = slot_component.get();
+          slot_ptr->getProperties().set("ModulationSlot", slot);
           slot_ptr->setExplicitFocusOrder(focus_order++);
           slot_ptr->setBounds(flatten_section ? 16 : 10, section_y, slot_width, slot_ptr->headerHeight());
           section_ptr->addAndMakeVisible(slot_ptr);
@@ -4048,7 +4513,24 @@ void SynthEditor::showAllSections(bool announce) {
             row->setModulationMenuCallback([this](const String& destinationId, Component& target) {
               showModulationSourceMenuForParameter(destinationId, target);
             });
+            row->setModulationSourceSubmenuCallback([this](const String& destinationId,
+                                                           std::map<int, String>& choices, int firstItemId) {
+              return createModulationSourceSubmenu(destinationId, choices, firstItemId);
+            });
+            row->setModulationAssignCallback([this](const String& sourceId, const String& destinationId,
+                                                    Component& target) {
+              connectModulationAndPromptForAmount(sourceId, destinationId, target);
+            });
+            row->setModulationEditCallback([this](const String& sourceId, const String& destinationId,
+                                                  Component& target) {
+              promptForInitialModulationAmount(sourceId, destinationId, false, target);
+            });
             row->setModulationDestinationPredicate([this](const String& id) { return isModulationDestinationId(id); });
+            row->setModulationRemovalCallbacks(
+                [this](const String& destinationId) { return modulationSourcesForDestination(destinationId); },
+                [this](const String& sourceId, const String& destinationId, Component& target) {
+                  removeModulationFromParameter(sourceId, destinationId, target);
+                });
             row->setMidiLearnCallback([this](const String& parameterId, Component&, bool clear) {
               if (clear) {
                 synth_.clearMidiLearn(parameterId.toStdString());
@@ -4064,8 +4546,10 @@ void SynthEditor::showAllSections(bool announce) {
             row->setValueEntryCallback([this](const String& parameterId, Component& target) {
               promptForParameterValue(parameterId, target);
             });
-            row->setExtraCommandCallback([this](const String& parameterId, const KeyPress& key, Component& target) {
-              return handleMacroShortcut(parameterId, key, target);
+            row->setExtraCommandCallback([this, section_name](const String& parameterId, const KeyPress& key,
+                                                              Component& target) {
+              return handleMacroShortcut(parameterId, key, target) ||
+                     handleEffectShortcut(section_name, key, target);
             });
             row->setExplicitFocusOrder(focus_order++);
             row->setControlFocusOrder(focus_order++);
@@ -4387,7 +4871,24 @@ void SynthEditor::showAllSections(bool announce) {
         row->setModulationMenuCallback([this](const String& destinationId, Component& target) {
           showModulationSourceMenuForParameter(destinationId, target);
         });
+        row->setModulationSourceSubmenuCallback([this](const String& destinationId,
+                                                       std::map<int, String>& choices, int firstItemId) {
+          return createModulationSourceSubmenu(destinationId, choices, firstItemId);
+        });
+        row->setModulationAssignCallback([this](const String& sourceId, const String& destinationId,
+                                                Component& target) {
+          connectModulationAndPromptForAmount(sourceId, destinationId, target);
+        });
+        row->setModulationEditCallback([this](const String& sourceId, const String& destinationId,
+                                              Component& target) {
+          promptForInitialModulationAmount(sourceId, destinationId, false, target);
+        });
         row->setModulationDestinationPredicate([this](const String& id) { return isModulationDestinationId(id); });
+        row->setModulationRemovalCallbacks(
+            [this](const String& destinationId) { return modulationSourcesForDestination(destinationId); },
+            [this](const String& sourceId, const String& destinationId, Component& target) {
+              removeModulationFromParameter(sourceId, destinationId, target);
+            });
         row->setMidiLearnCallback([this](const String& parameterId, Component&, bool clear) {
           if (clear) {
             synth_.clearMidiLearn(parameterId.toStdString());
@@ -4403,8 +4904,10 @@ void SynthEditor::showAllSections(bool announce) {
         row->setValueEntryCallback([this](const String& parameterId, Component& target) {
           promptForParameterValue(parameterId, target);
         });
-        row->setExtraCommandCallback([this](const String& parameterId, const KeyPress& key, Component& target) {
-          return handleMacroShortcut(parameterId, key, target);
+        row->setExtraCommandCallback([this, section_name](const String& parameterId, const KeyPress& key,
+                                                          Component& target) {
+          return handleMacroShortcut(parameterId, key, target) ||
+                 handleEffectShortcut(section_name, key, target);
         });
         row->setExplicitFocusOrder(focus_order++);
         row->setControlFocusOrder(focus_order++);
@@ -4421,6 +4924,7 @@ void SynthEditor::showAllSections(bool announce) {
         auto* summary_ptr = summary.get();
         summary_ptr->setTitle("Effects chain order");
         summary_ptr->setDescription("Current order of the effects chain");
+        summary_ptr->getProperties().set("SectionName", section_name);
         summary_ptr->setColour(Label::textColourId, Colours::white);
         summary_ptr->setJustificationType(Justification::centredLeft);
         summary_ptr->setBounds(flatten_section ? 16 : 10, section_y,
@@ -4444,13 +4948,14 @@ void SynthEditor::showAllSections(bool announce) {
         selector_ptr->setTitle("Effect position");
         selector_ptr->setDescription("Choose an effect in the current chain order");
         selector_ptr->setHelpText("Choose an effect, then use the move buttons to reorder it in the chain");
+        selector_ptr->getProperties().set("SectionName", section_name);
         selector_ptr->setWantsKeyboardFocus(true);
         selector_ptr->setExplicitFocusOrder(focus_order++);
         populateEffectChainSelector(*selector_ptr, summary_ptr, section_name);
         addEffectControl(*selector_ptr);
         section_headers_.push_back(std::move(selector));
 
-        auto moveLocalEffect = [this, section_name, selector_ptr, summary_ptr](int direction) {
+        auto moveLocalEffect = [this, section_name, selector_ptr](int direction, const String& focusedTitle) {
           const int selected = selector_ptr->getSelectedItemIndex();
           const int next = selected + direction;
           if (!isPositiveAndBelow(selected, vital::constants::kNumEffects) ||
@@ -4462,8 +4967,11 @@ void SynthEditor::showAllSections(bool announce) {
           std::swap(order[selected], order[next]);
           const String moved = effectName(order[next]);
           writeEffectChainOrder(section_name, order);
-          populateEffectChainSelector(*selector_ptr, summary_ptr, section_name);
-          selector_ptr->setSelectedItemIndex(next, dontSendNotification);
+          pending_effect_chain_section_ = section_name;
+          pending_effect_chain_selected_index_ = next;
+          MessageManager::callAsync([this, section_name, focusedTitle] {
+            rebuildSectionsAfterEffectOrderChange(section_name, focusedTitle);
+          });
           postPluginAnnouncement(moved + " moved to position " + String(next + 1),
                                                  AccessibilityHandler::AnnouncementPriority::high);
         };
@@ -4473,9 +4981,10 @@ void SynthEditor::showAllSections(bool announce) {
         move_up_ptr->setTitle("Move effect earlier");
         move_up_ptr->setDescription("Move the selected effect one position earlier in the effects chain");
         move_up_ptr->setHelpText("Press Enter to move the selected effect earlier");
+        move_up_ptr->getProperties().set("SectionName", section_name);
         move_up_ptr->setWantsKeyboardFocus(true);
         move_up_ptr->setExplicitFocusOrder(focus_order++);
-        move_up_ptr->onClick = [moveLocalEffect] { moveLocalEffect(-1); };
+        move_up_ptr->onClick = [moveLocalEffect] { moveLocalEffect(-1, "Move effect earlier"); };
         addEffectControl(*move_up_ptr);
         section_headers_.push_back(std::move(move_up));
 
@@ -4484,9 +4993,10 @@ void SynthEditor::showAllSections(bool announce) {
         move_down_ptr->setTitle("Move effect later");
         move_down_ptr->setDescription("Move the selected effect one position later in the effects chain");
         move_down_ptr->setHelpText("Press Enter to move the selected effect later");
+        move_down_ptr->getProperties().set("SectionName", section_name);
         move_down_ptr->setWantsKeyboardFocus(true);
         move_down_ptr->setExplicitFocusOrder(focus_order++);
-        move_down_ptr->onClick = [moveLocalEffect] { moveLocalEffect(1); };
+        move_down_ptr->onClick = [moveLocalEffect] { moveLocalEffect(1, "Move effect later"); };
         addEffectControl(*move_down_ptr);
         section_headers_.push_back(std::move(move_down));
       }
@@ -4550,6 +5060,7 @@ void SynthEditor::showAccessibilitySettingsMenu() {
     { "Modulation announcements",          &AccessibilitySpeechSettings::modulation       },
     { "Parameter value announcements",     &AccessibilitySpeechSettings::parameters       },
     { "Other announcements",               &AccessibilitySpeechSettings::other            },
+    { "Frequency values in Hz",            &AccessibilitySpeechSettings::frequency_values_in_hz },
   };
 
   class DialogContent : public Component {
@@ -4792,6 +5303,40 @@ String SynthEditor::modulationDestinationsForSource(const String& sourceId) cons
     destinations.add(destination + " " + amount_text);
   }
   return destinations.joinIntoString(", ");
+}
+
+std::vector<std::pair<String, String>> SynthEditor::modulationSourcesForDestination(const String& destinationId) const {
+  std::vector<std::pair<String, String>> sources;
+  StringArray seen_sources;
+  for (auto* route : synth_.getModulationConnections()) {
+    if (route == nullptr || route->source_name.empty() || route->destination_name != destinationId.toStdString())
+      continue;
+
+    const String source_id(route->source_name);
+    if (seen_sources.contains(source_id))
+      continue;
+
+    seen_sources.add(source_id);
+    sources.push_back({ source_id, modulationSourceLabelForId(source_id) });
+  }
+
+  std::sort(sources.begin(), sources.end(), [](const auto& a, const auto& b) {
+    return a.second.compareNatural(b.second) < 0;
+  });
+  return sources;
+}
+
+void SynthEditor::removeModulationFromParameter(const String& sourceId, const String& destinationId, Component& target) {
+  if (sourceId.isEmpty() || destinationId.isEmpty())
+    return;
+
+  const String source_label = modulationSourceLabelForId(sourceId);
+  const String destination_label = modulationDestinationLabelForId(destinationId);
+  synth_.disconnectModulation(sourceId.toStdString(), destinationId.toStdString());
+  refreshModulationRoutes();
+  target.grabKeyboardFocus();
+  postPluginAnnouncement("Removed modulation from " + source_label + " to " + destination_label,
+                                         AccessibilityHandler::AnnouncementPriority::high);
 }
 
 String SynthEditor::modulationSlotTitle(int slot) const {
@@ -5344,9 +5889,15 @@ void SynthEditor::updateModulationDestinationList() {
 
   modulation_destination_ids_.clear();
   modulation_destination_.clear(dontSendNotification);
+  const String selected_source = isPositiveAndBelow(modulation_source_.getSelectedItemIndex(),
+                                                    modulation_source_ids_.size())
+      ? modulation_source_ids_[modulation_source_.getSelectedItemIndex()]
+      : String();
   for (const auto& id : modulation_destination_all_ids_) {
     const String group = modulationDestinationGroupForId(id);
     if (selected_group != "All destinations" && group != selected_group)
+      continue;
+    if (isInvalidModulationPair(selected_source, id))
       continue;
 
     modulation_destination_ids_.add(id);
@@ -5389,6 +5940,19 @@ int SynthEditor::lfoPointIndexAtPhase(float phase) const {
       return i;
   }
   return -1;
+}
+
+int SynthEditor::currentLfoPointIndex() const {
+  auto* generator = activeLfoGenerator();
+  if (generator == nullptr)
+    return -1;
+
+  const int selected = selectedLfoPointIndex();
+  if (isPositiveAndBelow(selected, generator->getNumPoints()) &&
+      std::abs(generator->getPoint(selected).first - lfo_cursor_phase_) <= 0.0005f)
+    return selected;
+
+  return lfoPointIndexAtPhase(lfo_cursor_phase_);
 }
 
 bool SynthEditor::isLfoPointSelected(float phase) const {
@@ -5463,8 +6027,8 @@ String SynthEditor::lfoPointDescriptionFor(int lfoIndex, int pointIndex) const {
       ? generator->getPower(pointIndex)
       : generator->getPower(jmax(0, pointIndex - 1));
   return lfoTimeDescription(point.first) +
-         ", value " + percentString(1.0f - point.second) +
-         ", curve " + curveNameForIndex(curveIndexForPower(power, generator->smooth()));
+         ", " + percentString(1.0f - point.second) +
+         ", " + curveNameForIndex(curveIndexForPower(power, generator->smooth()));
 }
 
 String SynthEditor::lfoTimeDescription(float phase) const {
@@ -5484,9 +6048,9 @@ String SynthEditor::lfoMsegStatusTextFor(int lfoIndex) const {
   auto* generator = lfoGeneratorForIndex(lfoIndex);
   if (generator == nullptr)
     return "LFO editor unavailable";
-  const int selected = lfoIndex == active_lfo_index_ ? lfoPointIndexAtPhase(lfo_cursor_phase_) : 0;
+  const int selected = lfoIndex == active_lfo_index_ ? currentLfoPointIndex() : 0;
   if (isPositiveAndBelow(selected, generator->getNumPoints()))
-    return lfoPointDescriptionFor(lfoIndex, selected) + ", grid " + String(msegTimeDivisions()[lfo_grid_index_].name);
+    return lfoPointDescriptionFor(lfoIndex, selected) + ", " + String(msegTimeDivisions()[lfo_grid_index_].name);
   return lfoTimeDescription(lfo_cursor_phase_) + ", value " +
          percentString(generator->valueAtPhase(lfo_cursor_phase_)) + ", no point, grid " +
          String(msegTimeDivisions()[lfo_grid_index_].name);
@@ -5583,7 +6147,7 @@ void SynthEditor::updateLfoMsegSummary() {
   auto* generator = activeLfoGenerator();
   String summary = "Accessible MSEG editor unavailable";
   if (generator) {
-    const int point_index = lfoPointIndexAtPhase(lfo_cursor_phase_);
+    const int point_index = currentLfoPointIndex();
     summary = "Editing LFO " + String(active_lfo_index_ + 1) +
               ", " + String(generator->getNumPoints()) + " points";
     if (isPositiveAndBelow(point_index, generator->getNumPoints()))
@@ -5626,7 +6190,7 @@ void SynthEditor::moveToLfoPoint(int direction) {
 
   const float tolerance = 0.0005f;
   int next = -1;
-  const int current = lfoPointIndexAtPhase(lfo_cursor_phase_);
+  const int current = currentLfoPointIndex();
 
   if (current >= 0) {
     next = jlimit(0, generator->getNumPoints() - 1, current + direction);
@@ -5652,12 +6216,12 @@ void SynthEditor::moveToLfoPoint(int direction) {
       next = 0;
   }
 
-  lfo_mseg_point_.setSelectedItemIndex(next, sendNotificationSync);
   lfo_cursor_phase_ = generator->getPoint(next).first;
   if (!lfo_multi_selection_mode_) {
     selected_lfo_point_phases_.clear();
     selected_lfo_point_phases_.push_back(lfo_cursor_phase_);
   }
+  lfo_mseg_point_.setSelectedItemIndex(next, sendNotificationSync);
   postLfoAnnouncement(lfoMsegStatusText());
 }
 
@@ -6440,8 +7004,45 @@ void SynthEditor::readEffectChainOrder(const String& sectionName, int* order) co
 
 void SynthEditor::writeEffectChainOrder(const String& sectionName, const int* order) {
   const String prefix = effectChainPrefixForSection(sectionName);
-  for (int i = 0; i < vital::constants::kNumEffects; ++i)
-    setParameterEngineValue(prefix + "effect_chain_slot_" + String(i + 1), static_cast<float>(order[i]));
+  bool legacy_seen[vital::constants::kNumReorderableEffects] = {};
+  bool can_sync_legacy_order = true;
+  for (int i = 0; i < vital::constants::kNumReorderableEffects; ++i) {
+    if (!isPositiveAndBelow(order[i], vital::constants::kNumReorderableEffects) || legacy_seen[order[i]]) {
+      can_sync_legacy_order = false;
+      break;
+    }
+    legacy_seen[order[i]] = true;
+  }
+  for (int i = vital::constants::kNumReorderableEffects; i < vital::constants::kNumEffects; ++i)
+    can_sync_legacy_order = can_sync_legacy_order && order[i] == i;
+
+  if (can_sync_legacy_order) {
+    int legacy_order[vital::constants::kNumReorderableEffects];
+    for (int i = 0; i < vital::constants::kNumReorderableEffects; ++i)
+      legacy_order[i] = order[i];
+    const float encoded_order = vital::utils::encodeOrderToFloat(legacy_order,
+                                                                 vital::constants::kNumReorderableEffects);
+    if (auto* chain_order = parameterBridge(prefix + "effect_chain_order")) {
+      if (chain_order->convertToEngineValue(chain_order->getValue()) != encoded_order)
+        setParameterEngineValue(prefix + "effect_chain_order", encoded_order);
+    }
+  }
+
+  for (int i = 0; i < vital::constants::kNumEffects; ++i) {
+    const String slot_id = prefix + "effect_chain_slot_" + String(i + 1);
+    auto* slot = parameterBridge(slot_id);
+    if (slot == nullptr)
+      continue;
+
+    const int current = static_cast<int>(std::round(slot->convertToEngineValue(slot->getValue())));
+    if (current != order[i])
+      setParameterEngineValue(slot_id, static_cast<float>(order[i]));
+  }
+
+  if (auto* post_order = parameterBridge(prefix + "post_effect_order")) {
+    if (post_order->convertToEngineValue(post_order->getValue()) != 0.0f)
+      setParameterEngineValue(prefix + "post_effect_order", 0.0f);
+  }
 }
 
 void SynthEditor::populateEffectChainSelector(ComboBox& selector, Label* summary, const String& sectionName) const {
@@ -6449,6 +7050,8 @@ void SynthEditor::populateEffectChainSelector(ComboBox& selector, Label* summary
   readEffectChainOrder(sectionName, order);
 
   const int previous = selector.getSelectedItemIndex();
+  const bool use_pending_selection = pending_effect_chain_selected_index_ >= 0 &&
+                                     pending_effect_chain_section_ == sectionName;
   selector.clear(dontSendNotification);
   String summary_text = "Current effects order: ";
   for (int i = 0; i < vital::constants::kNumEffects; ++i) {
@@ -6457,8 +7060,13 @@ void SynthEditor::populateEffectChainSelector(ComboBox& selector, Label* summary
     summary_text += (i == 0 ? "" : ", ") + name;
   }
 
-  selector.setSelectedItemIndex(jlimit(0, vital::constants::kNumEffects - 1, previous),
+  selector.setSelectedItemIndex(jlimit(0, vital::constants::kNumEffects - 1,
+                                       use_pending_selection ? pending_effect_chain_selected_index_ : previous),
                                 dontSendNotification);
+  if (use_pending_selection) {
+    pending_effect_chain_section_.clear();
+    pending_effect_chain_selected_index_ = -1;
+  }
   if (summary != nullptr) {
     summary->setText(summary_text, dontSendNotification);
     summary->setDescription(summary_text);
@@ -6469,6 +7077,24 @@ void SynthEditor::populateEffectChainSelector(ComboBox& selector, Label* summary
 
 void SynthEditor::refreshEffectChainControls() {
   populateEffectChainSelector(effect_chain_selector_, &effect_chain_summary_, last_section_name);
+}
+
+void SynthEditor::rebuildSectionsAfterEffectOrderChange(const String& preferredSection, const String& focusedTitle,
+                                                        const String& focusedParameter) {
+  const String section = preferredSection.isNotEmpty() ? preferredSection : last_section_name;
+  const String accessible_title = focusedTitle.isNotEmpty() ? focusedTitle : focusedAccessibleTitle();
+  const String parameter_id = focusedParameter.isNotEmpty() ? focusedParameter : focusedParameterId();
+  auto* persistent_focus = persistentFocusedComponent();
+  buildSections();
+
+  if (show_all_sections_)
+    showAllSections(false);
+  else if (section_names_.contains(section))
+    selectSectionByName(section, false);
+  else if (section_names_.size() > 0)
+    selectSectionByName(section_names_[0], false);
+
+  restoreFocusAfterRebuild(parameter_id, persistent_focus, accessible_title, section);
 }
 
 void SynthEditor::moveSelectedEffect(int direction) {
@@ -6483,8 +7109,14 @@ void SynthEditor::moveSelectedEffect(int direction) {
   std::swap(order[selected], order[next]);
   const String moved = effectName(order[next]);
   writeEffectChainOrder(last_section_name, order);
-  refreshEffectChainControls();
-  effect_chain_selector_.setSelectedItemIndex(next, dontSendNotification);
+  pending_effect_chain_section_ = last_section_name;
+  pending_effect_chain_selected_index_ = next;
+  const String focused_title = focusedAccessibleTitle();
+  MessageManager::callAsync([this, section = last_section_name, focused_title, next] {
+    rebuildSectionsAfterEffectOrderChange(section, focused_title);
+    refreshEffectChainControls();
+    effect_chain_selector_.setSelectedItemIndex(next, dontSendNotification);
+  });
   postPluginAnnouncement(moved + " moved to position " + String(next + 1),
                                          AccessibilityHandler::AnnouncementPriority::high);
 }
@@ -6493,6 +7125,11 @@ void SynthEditor::connectModulationAndPromptForAmount(const String& sourceId, co
                                                       Component& target) {
   if (sourceId.isEmpty() || destinationId.isEmpty())
     return;
+  if (isInvalidModulationPair(sourceId, destinationId)) {
+    postPluginAnnouncement(modulationSourceLabelForId(sourceId) + " cannot modulate its own controls",
+                                           AccessibilityHandler::AnnouncementPriority::high);
+    return;
+  }
 
   const bool created = synth_.connectModulation(sourceId.toStdString(), destinationId.toStdString());
   const int macro_index = macroIndexForControlId(sourceId);
@@ -6517,24 +7154,23 @@ void SynthEditor::connectModulationAndPromptForAmount(const String& sourceId, co
 
 void SynthEditor::promptForInitialModulationAmount(const String& sourceId, const String& destinationId,
                                                    bool created, Component& target) {
-  ignoreUnused(target);
   parameter_value_prompt_visible_ = false;
   pending_parameter_value_id_.clear();
   pending_custom_value_title_.clear();
   pending_custom_value_apply_ = nullptr;
-  pending_parameter_value_focus_ = nullptr;
+  pending_parameter_value_focus_ = &target;
   pending_modulation_source_ = sourceId;
   pending_modulation_destination_ = destinationId;
   pending_modulation_created_ = created;
   modulation_amount_prompt_visible_ = true;
-  modulation_amount_prompt_.setText("Maximum amount for " + modulationSourceLabelForId(sourceId) + " to " +
+  modulation_amount_prompt_.setText("Peak value for " + modulationSourceLabelForId(sourceId) + " to " +
                                     modulationDestinationLabelForId(destinationId),
                                     dontSendNotification);
   modulation_amount_prompt_.setTitle("Initial modulation amount");
-  modulation_amount_prompt_.setDescription("Type the maximum modulation amount from minus one to one");
-  modulation_amount_editor_.setTitle("Maximum modulation amount");
-  modulation_amount_editor_.setDescription("Maximum modulation amount from minus one to one");
-  modulation_amount_editor_.setHelpText("Type a value from minus one to one, then press Return or OK");
+  modulation_amount_prompt_.setDescription("Type the destination value this modulation should peak at");
+  modulation_amount_editor_.setTitle("Modulation peak value");
+  modulation_amount_editor_.setDescription("Type the destination value this modulation should peak at");
+  modulation_amount_editor_.setHelpText("Type the real destination value, such as 12 semitones, 50%, 1000 Hz, or C4. Type raw followed by a number to enter a normalized amount.");
   modulation_amount_ok_.setTitle("Set modulation amount");
   modulation_amount_ok_.setDescription("Apply the typed initial modulation amount");
   modulation_amount_cancel_.setTitle("Cancel modulation amount");
@@ -6543,14 +7179,29 @@ void SynthEditor::promptForInitialModulationAmount(const String& sourceId, const
   modulation_amount_editor_.setVisible(true);
   modulation_amount_ok_.setVisible(true);
   modulation_amount_cancel_.setVisible(true);
-  modulation_amount_editor_.setText("1.0", dontSendNotification);
+  String peak_value = "1.0";
+  if (auto* bridge = parameterBridge(destinationId)) {
+    peak_value = accessibleParameterText(*bridge, bridge->getValue());
+    const int connection = synth_.getConnectionIndex(sourceId.toStdString(), destinationId.toStdString());
+    if (connection >= 0) {
+      if (auto* amount_bridge = parameterBridge("modulation_" + String(connection + 1) + "_amount")) {
+        const auto& details = bridge->getDetails();
+        const float current_engine = bridge->convertToEngineValue(bridge->getValue());
+        const float amount = amount_bridge->convertToEngineValue(amount_bridge->getValue());
+        const float peak_engine = jlimit(details.min, details.max,
+                                         current_engine + amount * (details.max - details.min));
+        peak_value = accessibleParameterText(*bridge, bridge->convertToPluginValue(peak_engine));
+      }
+    }
+  }
+  modulation_amount_editor_.setText(peak_value, dontSendNotification);
   rebuildFocusOrder();
   resized();
   modulation_amount_editor_.grabKeyboardFocus();
   modulation_amount_editor_.selectAll();
   if (auto* handler = modulation_amount_editor_.getAccessibilityHandler())
     handler->grabFocus();
-  postPluginAnnouncement("Type maximum modulation amount",
+  postPluginAnnouncement("Type modulation peak value",
                                          AccessibilityHandler::AnnouncementPriority::high);
 }
 
@@ -6570,7 +7221,7 @@ void SynthEditor::promptForParameterValue(const String& parameterId, Component& 
   pending_parameter_value_focus_ = &target;
 
   const String name = bridge->getName(128);
-  String value = bridge->getText(bridge->getValue(), 128);
+  String value = accessibleParameterText(*bridge, bridge->getValue());
   const int macro_index = macroIndexForControlId(parameterId);
   if (macro_index >= 0 && isMacroBipolar(macro_index))
     value = String(roundToInt((bridge->getValue() * 2.0f - 1.0f) * 100.0f)) + "%";
@@ -6579,7 +7230,7 @@ void SynthEditor::promptForParameterValue(const String& parameterId, Component& 
   modulation_amount_prompt_.setDescription("Type a value for " + name);
   modulation_amount_editor_.setTitle(name + " value");
   modulation_amount_editor_.setDescription("Type a value for " + name);
-  modulation_amount_editor_.setHelpText("Type a value and press Return. Units like percent, ms, seconds, dB, and named options are accepted.");
+  modulation_amount_editor_.setHelpText("Type a value and press Return. Units like percent, ms, seconds, dB, note names, and named options are accepted.");
   if (isTransposeQuantizeParameter(parameterId)) {
     modulation_amount_editor_.setDescription("Type a scale name such as major or minor, custom notes such as C D E F G A B, or add global for global snap");
     modulation_amount_editor_.setHelpText("Examples: major, minor, global major, C D E F G A B, C D E flat F G A flat B flat, chromatic, or off.");
@@ -6674,7 +7325,7 @@ void SynthEditor::applyInlineTextPrompt() {
 void SynthEditor::applyInitialModulationAmount() {
   const String source_id = pending_modulation_source_;
   const String destination_id = pending_modulation_destination_;
-  const float amount = jlimit(-1.0f, 1.0f, static_cast<float>(modulation_amount_editor_.getText().getDoubleValue()));
+  const float amount = modulationAmountFromPeakText(destination_id, modulation_amount_editor_.getText());
   const int connection = synth_.getConnectionIndex(source_id.toStdString(), destination_id.toStdString());
   if (connection >= 0) {
     setParameterEngineValue("modulation_" + String(connection + 1) + "_amount", amount);
@@ -6692,10 +7343,38 @@ void SynthEditor::applyInitialModulationAmount() {
   rebuildFocusOrder();
   resized();
 
+  if (pending_parameter_value_focus_ != nullptr)
+    pending_parameter_value_focus_->grabKeyboardFocus();
+  pending_parameter_value_focus_ = nullptr;
+
   postPluginAnnouncement(modulationSourceLabelForId(source_id) + " assigned to " +
                                          modulationDestinationLabelForId(destination_id) +
-                                         ", amount " + String(amount, 2),
+                                         ", peak " + modulation_amount_editor_.getText().trim(),
                                          AccessibilityHandler::AnnouncementPriority::high);
+}
+
+float SynthEditor::modulationAmountFromPeakText(const String& destinationId, const String& text) const {
+  const String trimmed = text.trim();
+  const String lower = trimmed.toLowerCase();
+  if (lower.startsWith("raw ") || lower.startsWith("normalized ")) {
+    const String value = lower.startsWith("raw ") ? trimmed.fromFirstOccurrenceOf(" ", false, false)
+                                                  : trimmed.fromFirstOccurrenceOf(" ", false, false);
+    return jlimit(-1.0f, 1.0f, static_cast<float>(value.getDoubleValue()));
+  }
+
+  auto* bridge = parameterBridge(destinationId);
+  if (bridge == nullptr)
+    return jlimit(-1.0f, 1.0f, static_cast<float>(trimmed.getDoubleValue()));
+
+  const float target_normalized = static_cast<float>(accessibleParameterValueForText(*bridge, trimmed));
+  const float target_engine = bridge->convertToEngineValue(target_normalized);
+  const float current_engine = bridge->convertToEngineValue(bridge->getValue());
+  const auto& details = bridge->getDetails();
+  const float range = details.max - details.min;
+  if (range <= 0.0f)
+    return 0.0f;
+
+  return jlimit(-1.0f, 1.0f, (target_engine - current_engine) / range);
 }
 
 void SynthEditor::applyParameterValue() {
@@ -6725,7 +7404,7 @@ void SynthEditor::applyParameterValue() {
 
   auto* bridge = parameterBridge(parameter_id);
   if (bridge != nullptr) {
-    float value = bridge->getValueForText(modulation_amount_editor_.getText());
+    float value = static_cast<float>(accessibleParameterValueForText(*bridge, modulation_amount_editor_.getText()));
     const int macro_index = macroIndexForControlId(parameter_id);
     if (macro_index >= 0) {
       if (isMacroBipolar(macro_index)) {
@@ -6783,7 +7462,7 @@ void SynthEditor::applyParameterValue() {
                                              AccessibilityHandler::AnnouncementPriority::high);
     }
     else {
-      postPluginAnnouncement(bridge->getName(128) + " " + bridge->getText(bridge->getValue(), 128),
+      postPluginAnnouncement(bridge->getName(128) + " " + accessibleParameterText(*bridge, bridge->getValue()),
                                              AccessibilityHandler::AnnouncementPriority::high);
     }
   }
@@ -6818,6 +7497,61 @@ void SynthEditor::setMacroBipolar(int macroIndex, bool bipolar) {
       setParameterEngineValue("modulation_" + String(connection + 1) + "_bipolar", bipolar ? 1.0f : 0.0f);
   }
   refreshModulationRoutes();
+}
+
+bool SynthEditor::moveEffectInSection(const String& sectionName, const String& effectId, int direction,
+                                      const String& focusedTitle) {
+  if (sectionName.isEmpty() || effectId.isEmpty())
+    return false;
+
+  int order[vital::constants::kNumEffects];
+  readEffectChainOrder(sectionName, order);
+
+  int selected = -1;
+  for (int i = 0; i < vital::constants::kNumEffects; ++i) {
+    if (strings::kEffectOrder[order[i]] == effectId) {
+      selected = i;
+      break;
+    }
+  }
+
+  const int next = selected + direction;
+  if (!isPositiveAndBelow(selected, vital::constants::kNumEffects) ||
+      !isPositiveAndBelow(next, vital::constants::kNumEffects))
+    return true;
+
+  std::swap(order[selected], order[next]);
+  const String moved = effectName(order[next]);
+  const String parameter_id = focusedParameterId();
+  writeEffectChainOrder(sectionName, order);
+  String chain_section = isEffectChainSection(sectionName) ? sectionName : String(kEffectsChainSection);
+  for (int bus = 1; bus <= vital::kNumBuses; ++bus) {
+    const String bus_prefix = "Bus " + String(bus) + " - ";
+    if (sectionName.startsWith(bus_prefix)) {
+      chain_section = "Bus " + String(bus) + " - " + kEffectsChainSection;
+      break;
+    }
+  }
+  pending_effect_chain_section_ = chain_section;
+  pending_effect_chain_selected_index_ = next;
+  MessageManager::callAsync([this, sectionName, focusedTitle, parameter_id] {
+    rebuildSectionsAfterEffectOrderChange(sectionName, focusedTitle, parameter_id);
+  });
+  postPluginAnnouncement(moved + " moved to position " + String(next + 1),
+                                         AccessibilityHandler::AnnouncementPriority::high);
+  return true;
+}
+
+bool SynthEditor::handleEffectShortcut(const String& sectionName, const KeyPress& key, Component& target) {
+  const String effect_id = effectIdForSection(sectionName);
+  if (effect_id.isEmpty())
+    return false;
+
+  if (isEffectMoveEarlierKey(key))
+    return moveEffectInSection(sectionName, effect_id, -1, target.getTitle());
+  if (isEffectMoveLaterKey(key))
+    return moveEffectInSection(sectionName, effect_id, 1, target.getTitle());
+  return false;
 }
 
 bool SynthEditor::handleMacroShortcut(const String& parameterId, const KeyPress& key, Component& target) {
@@ -6894,16 +7628,18 @@ void SynthEditor::cancelInitialModulationAmount() {
   rebuildFocusOrder();
   resized();
 
+  if (pending_parameter_value_focus_ != nullptr)
+    pending_parameter_value_focus_->grabKeyboardFocus();
+  pending_parameter_value_focus_ = nullptr;
+
   postPluginAnnouncement(modulationSourceLabelForId(source_id) + " assigned to " +
                                          modulationDestinationLabelForId(destination_id) +
                                          (created ? "" : ", already assigned"),
                                          AccessibilityHandler::AnnouncementPriority::high);
 }
 
-void SynthEditor::showModulationSourceMenuForParameter(const String& destinationId, Component& target) {
-  if (destinationId.isEmpty())
-    return;
-
+PopupMenu SynthEditor::createModulationSourceSubmenu(const String& destinationId, std::map<int, String>& choices,
+                                                     int firstItemId) {
   struct SourceChoice {
     String id;
     String label;
@@ -6916,6 +7652,9 @@ void SynthEditor::showModulationSourceMenuForParameter(const String& destination
 
   std::map<String, std::vector<SourceChoice>> groups;
   for (const auto& id : modulation_source_ids_) {
+    if (isInvalidModulationPair(id, destinationId))
+      continue;
+
     if (id.startsWith("lfo_"))
       addSource(groups, "LFOs", id);
     else if (id.startsWith("env_"))
@@ -6931,9 +7670,7 @@ void SynthEditor::showModulationSourceMenuForParameter(const String& destination
   }
 
   PopupMenu menu;
-  menu.addSectionHeader("Assign modulation to " + modulationDestinationLabelForId(destinationId));
-  std::vector<String> choice_ids;
-  int item_id = 1;
+  int item_id = firstItemId;
   for (const auto& group_name : StringArray{ "LFOs", "Envelopes", "Random", "Macros",
                                              "MIDI and expression" }) {
     const auto found = groups.find(group_name);
@@ -6951,7 +7688,7 @@ void SynthEditor::showModulationSourceMenuForParameter(const String& destination
 
     PopupMenu source_menu;
     for (const auto& source : sources) {
-      choice_ids.push_back(source.id);
+      choices[item_id] = source.id;
       const int macro_index = macroIndexForControlId(source.id);
       const String label = macro_index >= 0 ? synth_.getMacroName(macro_index)
                                             : modulationSourceLabelForId(source.id);
@@ -6960,17 +7697,29 @@ void SynthEditor::showModulationSourceMenuForParameter(const String& destination
     menu.addSubMenu(group_name, source_menu, true);
   }
 
-  if (choice_ids.empty()) {
-    menu.addItem(1, "No modulation sources available", false);
-  }
+  if (choices.empty())
+    menu.addItem(firstItemId, "No modulation sources available", false);
+
+  return menu;
+}
+
+void SynthEditor::showModulationSourceMenuForParameter(const String& destinationId, Component& target) {
+  if (destinationId.isEmpty())
+    return;
+
+  std::map<int, String> choice_ids;
+  PopupMenu menu;
+  menu.addSectionHeader("Assign modulation to " + modulationDestinationLabelForId(destinationId));
+  menu.addSubMenu("Add modulation source", createModulationSourceSubmenu(destinationId, choice_ids, 1),
+                  !choice_ids.empty());
 
   menu.showMenuAsync(PopupMenu::Options().withTargetComponent(&target),
                      [this, destinationId, choice_ids](int result) {
-    if (!isPositiveAndBelow(result - 1, static_cast<int>(choice_ids.size())))
+    const auto found = choice_ids.find(result);
+    if (found == choice_ids.end())
       return;
 
-    connectModulationAndPromptForAmount(choice_ids[static_cast<size_t>(result - 1)], destinationId,
-                                        *this);
+    connectModulationAndPromptForAmount(found->second, destinationId, *this);
   });
 }
 
@@ -7011,6 +7760,42 @@ void SynthEditor::refreshModulationRoutes() {
     modulation_list_.selectRow(0);
   if (modulation_routes_.empty())
     showSelectedModulationParameters();
+  refreshVisibleModulationLabels();
+}
+
+void SynthEditor::refreshVisibleModulationLabels() {
+  for (auto& header : section_headers_) {
+    auto* section = dynamic_cast<AccessibleSectionHeader*>(header.get());
+    if (section == nullptr || !section->getProperties().contains("ModulationSlot"))
+      continue;
+
+    const int slot = static_cast<int>(section->getProperties()["ModulationSlot"]);
+    section->setHeaderTitle(modulationSlotTitle(slot));
+  }
+
+  for (auto& row : rows_) {
+    if (!row)
+      continue;
+
+    const String id = row->parameterId();
+    if (!id.startsWith("modulation_"))
+      continue;
+
+    const String rest = id.fromFirstOccurrenceOf("modulation_", false, false);
+    const int slot = rest.upToFirstOccurrenceOf("_", false, false).getIntValue();
+    if (slot <= 0)
+      continue;
+
+    const String suffix = rest.fromFirstOccurrenceOf("_", false, false);
+    String title = modulationSlotTitle(slot);
+    if (suffix.isNotEmpty())
+      title += ", " + readableId(suffix);
+    row->setAccessibleName(title, "Adjust " + title);
+  }
+
+  modulation_list_.updateContent();
+  if (auto* handler = modulation_list_.getAccessibilityHandler())
+    handler->notifyAccessibilityEvent(AccessibilityEvent::titleChanged);
 }
 
 void SynthEditor::showSelectedModulationParameters() {
@@ -7037,7 +7822,24 @@ void SynthEditor::showSelectedModulationParameters() {
     control->setModulationMenuCallback([this](const String& destinationId, Component& target) {
       showModulationSourceMenuForParameter(destinationId, target);
     });
+    control->setModulationSourceSubmenuCallback([this](const String& destinationId,
+                                                       std::map<int, String>& choices, int firstItemId) {
+      return createModulationSourceSubmenu(destinationId, choices, firstItemId);
+    });
+    control->setModulationAssignCallback([this](const String& sourceId, const String& destinationId,
+                                                Component& target) {
+      connectModulationAndPromptForAmount(sourceId, destinationId, target);
+    });
+    control->setModulationEditCallback([this](const String& sourceId, const String& destinationId,
+                                              Component& target) {
+      promptForInitialModulationAmount(sourceId, destinationId, false, target);
+    });
     control->setModulationDestinationPredicate([this](const String& id) { return isModulationDestinationId(id); });
+    control->setModulationRemovalCallbacks(
+        [this](const String& destinationId) { return modulationSourcesForDestination(destinationId); },
+        [this](const String& sourceId, const String& destinationId, Component& target) {
+          removeModulationFromParameter(sourceId, destinationId, target);
+        });
     control->setMidiLearnCallback([this](const String& parameterId, Component&, bool clear) {
       if (clear) {
         synth_.clearMidiLearn(parameterId.toStdString());
@@ -7967,6 +8769,16 @@ bool SynthEditor::keyPressed(const KeyPress& key) {
     announceModulationSummary();
     return true;
   }
+  if (effect_chain_controls_visible_) {
+    if (isEffectMoveEarlierKey(key)) {
+      moveSelectedEffect(-1);
+      return true;
+    }
+    if (isEffectMoveLaterKey(key)) {
+      moveSelectedEffect(1);
+      return true;
+    }
+  }
   if (key.getTextCharacter() == ',') {
     moveToSection(-1);
     return true;
@@ -7985,6 +8797,8 @@ void SynthEditor::timerCallback() {
     refreshRoutingControls();
   for (auto& row : rows_)
     row->refresh();
+  if (modulation_controls_visible_)
+    refreshVisibleModulationLabels();
   if (active_oscillator_ >= 0 && !updating_oscillator_controls_)
     refreshOscillatorDirectControls();
 }
