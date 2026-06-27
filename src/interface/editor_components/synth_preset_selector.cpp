@@ -58,6 +58,8 @@ namespace {
       preset_selector->signOut();
     else if (result == SynthPresetSelector::kLogIn)
       preset_selector->signIn();
+    else if (result == SynthPresetSelector::kToggleScanDownloads)
+      preset_selector->toggleScanDownloads();
   }
 
   String redactEmail(const String& email) {
@@ -206,6 +208,11 @@ void SynthPresetSelector::showPopupMenu(Component* anchor) {
   if (!hasDefaultTuning())
     options.addItem(kClearTuning, "Clear Tuning: " + getTuningName());
   
+  options.addItem(-1, "");
+  bool scan_downloads = LoadSave::shouldScanDownloads();
+  std::string scan_label = scan_downloads ? "Scan Downloads on Startup: On" : "Scan Downloads on Startup: Off";
+  options.addItem(kToggleScanDownloads, scan_label, scan_downloads);
+
   options.addItem(-1, "");
   std::string logged_in_as = loggedInName();
   if (logged_in_as.empty())
@@ -429,4 +436,15 @@ void SynthPresetSelector::repaintWithSkin() {
 void SynthPresetSelector::browsePresets() {
   if (browser_)
     setPresetBrowserVisibile(true);
+}
+
+void SynthPresetSelector::toggleScanDownloads() {
+  bool enabled = !LoadSave::shouldScanDownloads();
+  LoadSave::saveScanDownloads(enabled);
+
+  if (enabled) {
+    LoadSave::scanDownloadsForPresets();
+    for (Listener* listener : listeners_)
+      listener->bankImported();
+  }
 }

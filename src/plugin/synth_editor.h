@@ -144,6 +144,7 @@ class SynthEditor : public AudioProcessorEditor, public SynthGuiInterface,
     void populatePresetFilters();
     void filterPresetList();
     void showPresetMenu();
+    void toggleScanDownloads();
     void selectPresetFile(const File& file);
     void loadSelectedPreset();
     void choosePresetFile();

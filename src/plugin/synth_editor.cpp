@@ -5021,6 +5021,8 @@ void SynthEditor::showPresetMenu() {
   menu.addSeparator();
   menu.addItem(7, preset_preview_.getToggleState() ? "Turn autoload preset when scrolling off"
                                                    : "Turn autoload preset when scrolling on");
+  menu.addItem(9, LoadSave::shouldScanDownloads() ? "Turn scan Downloads folder on startup off"
+                                                  : "Turn scan Downloads folder on startup on");
 
   menu.showMenuAsync(PopupMenu::Options().withTargetComponent(preset_menu_),
                      [this](int result) {
@@ -5035,7 +5037,26 @@ void SynthEditor::showPresetMenu() {
     else if (result == 7) {
       preset_preview_.setToggleState(!preset_preview_.getToggleState(), sendNotificationSync);
     }
+    else if (result == 9)
+      toggleScanDownloads();
   });
+}
+
+void SynthEditor::toggleScanDownloads() {
+  bool enabled = !LoadSave::shouldScanDownloads();
+  LoadSave::saveScanDownloads(enabled);
+
+  if (enabled) {
+    int imported = LoadSave::scanDownloadsForPresets();
+    refreshPresetList();
+    postPluginAnnouncement("Scan Downloads folder for presets on startup on, " + String(imported) +
+                               " new presets imported",
+                           AccessibilityHandler::AnnouncementPriority::high);
+  }
+  else {
+    postPluginAnnouncement("Scan Downloads folder for presets on startup off",
+                           AccessibilityHandler::AnnouncementPriority::high);
+  }
 }
 
 

@@ -1481,6 +1481,12 @@ void LoadSave::saveAnimateWidgets(bool animate_widgets) {
   saveJsonToConfig(data);
 }
 
+void LoadSave::saveScanDownloads(bool scan_downloads) {
+  json data = getConfigJson();
+  data["scan_downloads"] = scan_downloads;
+  saveJsonToConfig(data);
+}
+
 void LoadSave::saveDisplayHzFrequency(bool hz_frequency) {
   json data = getConfigJson();
   data["hz_frequency"] = hz_frequency;
@@ -1759,6 +1765,15 @@ bool LoadSave::shouldAnimateWidgets() {
   return data["animate_widgets"];
 }
 
+bool LoadSave::shouldScanDownloads() {
+  json data = getConfigJson();
+
+  if (!data.count("scan_downloads"))
+    return false;
+
+  return data["scan_downloads"];
+}
+
 bool LoadSave::displayHzFrequency() {
   json data = getConfigJson();
 
@@ -2004,6 +2019,36 @@ File LoadSave::getUserFxDirectory() {
   if (!directory.exists())
     directory.createDirectory();
   return directory;
+}
+
+File LoadSave::getDownloadsDirectory() {
+  // JUCE has no dedicated "downloads" special location, but on both Windows and
+  // macOS the Downloads folder lives at <home>/Downloads.
+  return File::getSpecialLocation(File::userHomeDirectory).getChildFile("Downloads");
+}
+
+int LoadSave::scanDownloadsForPresets() {
+  File downloads = getDownloadsDirectory();
+  if (!downloads.exists() || !downloads.isDirectory())
+    return 0;
+
+  Array<File> found;
+  downloads.findChildFiles(found, File::findFiles, false, vital::kPresetExtensionsList);
+
+  File destination = getUserPresetDirectory();
+  int imported = 0;
+  for (const File& preset : found) {
+    File target = destination.getChildFile(preset.getFileName());
+    if (target.exists())
+      continue;
+
+    if (preset.copyFileTo(target))
+      imported++;
+    else
+      writeErrorLog("Failed to copy downloaded preset: " + preset.getFullPathName());
+  }
+
+  return imported;
 }
 
 void LoadSave::getAllFilesOfTypeInDirectories(Array<File>& files, const String& extensions,

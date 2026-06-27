@@ -119,6 +119,7 @@ class LoadSave {
     static bool shouldWorkOffline();
     static std::string getLoadedSkin();
     static bool shouldAnimateWidgets();
+    static bool shouldScanDownloads();
     static bool displayHzFrequency();
     static bool authenticated();
     static int getOversamplingAmount();
@@ -136,6 +137,7 @@ class LoadSave {
     static void saveWorkOffline(bool work_offline);
     static void saveLoadedSkin(const std::string& name);
     static void saveAnimateWidgets(bool animate_widgets);
+    static void saveScanDownloads(bool scan_downloads);
     static void saveDisplayHzFrequency(bool display_hz);
     static void saveAuthenticated(bool authenticated);
     static void saveWindowSize(float window_size);
@@ -164,6 +166,8 @@ class LoadSave {
     static File getUserSampleDirectory();
     static File getUserLfoDirectory();
     static File getUserFxDirectory();
+    static File getDownloadsDirectory();
+    static int scanDownloadsForPresets();
     static void getAllFilesOfTypeInDirectories(Array<File>& files, const String& extensions,
                                                const std::vector<File>& directories);
     static void getAllPresets(Array<File>& presets);
