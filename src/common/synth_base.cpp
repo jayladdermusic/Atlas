@@ -66,6 +66,8 @@ SynthBase::SynthBase() : expired_(false) {
   controls_ = engine_->getControls();
 
   Startup::doStartupChecks(midi_manager_.get());
+  if (LoadSave::shouldScanDownloads())
+    downloaded_presets_imported_ = LoadSave::scanDownloadsForPresets();
 }
 
 SynthBase::~SynthBase() { }
@@ -737,6 +739,10 @@ void SynthBase::setStyle(const String& style) {
   save_info_["style"] = style;
 }
 
+void SynthBase::setTags(const String& tags) {
+  save_info_["tags"] = tags;
+}
+
 void SynthBase::setPresetName(const String& preset_name) {
   save_info_["preset_name"] = preset_name;
 }
@@ -755,6 +761,10 @@ String SynthBase::getComments() {
 
 String SynthBase::getStyle() {
   return save_info_["style"];
+}
+
+String SynthBase::getTags() {
+  return save_info_["tags"];
 }
 
 String SynthBase::getPresetName() {

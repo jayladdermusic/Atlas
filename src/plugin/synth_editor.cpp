@@ -21,8 +21,10 @@
 #include "sound_engine.h"
 #include "load_save.h"
 #include "line_generator.h"
+#include "producers_module.h"
 #include "sample_source.h"
 #include "synth_lfo.h"
+#include "synth_oscillator.h"
 #include "synth_strings.h"
 #include "utils.h"
 #include "formant_filter.h"
@@ -43,6 +45,10 @@ namespace {
   constexpr const char* kPresetSection = "Presets";
   constexpr const char* kSignalRoutingSection = "Signal routing";
   constexpr const char* kEffectsChainSection = "Chain and routing";
+  constexpr const char* kAllLibraries = "All libraries";
+  constexpr const char* kFactoryLibrary = "Factory";
+  constexpr const char* kUserLibrary = "User";
+  constexpr const char* kOtherLibrary = "Other";
   constexpr const char* kAllBanks = "All banks";
   constexpr const char* kAllCategories = "All categories";
   constexpr int kBrowserRescanMenuId = 0x3fff0001;
@@ -211,7 +217,57 @@ namespace {
     return details.min >= 0.0f && details.max >= 120.0f && details.max <= 140.0f;
   }
 
+  int oscillatorIndexFromDistortionParameter(const String& parameter_id) {
+    if (!parameter_id.startsWith("osc_") || !parameter_id.endsWith("_distortion_type"))
+      return -1;
+
+    const String number_text = parameter_id.substring(4).upToFirstOccurrenceOf("_", false, false);
+    const int oscillator_index = number_text.getIntValue() - 1;
+    return isPositiveAndBelow(oscillator_index, vital::kNumOscillators) ? oscillator_index : -1;
+  }
+
+  String oscillatorDistortionValueText(const ValueBridge& bridge, double normalized_value) {
+    const int oscillator_index = oscillatorIndexFromDistortionParameter(bridge.getParameterId());
+    if (oscillator_index < 0)
+      return "";
+
+    const int distortion_type = static_cast<int>(std::round(bridge.convertToEngineValue(
+        static_cast<float>(normalized_value))));
+    auto oscillator_source_text = [](int source_index) {
+      return "Oscillator " + String(source_index + 1);
+    };
+
+    switch (distortion_type) {
+      case vital::SynthOscillator::kFmOscillatorA:
+        return "FM from " + oscillator_source_text(vital::ProducersModule::getFirstModulationIndex(oscillator_index));
+      case vital::SynthOscillator::kFmOscillatorB:
+        return "FM from " + oscillator_source_text(vital::ProducersModule::getSecondModulationIndex(oscillator_index));
+      case vital::SynthOscillator::kFmOscillatorC:
+        return "FM from " + oscillator_source_text(vital::ProducersModule::getThirdModulationIndex(oscillator_index));
+      case vital::SynthOscillator::kFmSample:
+        return "FM from Sample";
+      case vital::SynthOscillator::kFmGranular:
+        return "FM from Granular";
+      case vital::SynthOscillator::kRmOscillatorA:
+        return "Ring Mod from " + oscillator_source_text(vital::ProducersModule::getFirstModulationIndex(oscillator_index));
+      case vital::SynthOscillator::kRmOscillatorB:
+        return "Ring Mod from " + oscillator_source_text(vital::ProducersModule::getSecondModulationIndex(oscillator_index));
+      case vital::SynthOscillator::kRmOscillatorC:
+        return "Ring Mod from " + oscillator_source_text(vital::ProducersModule::getThirdModulationIndex(oscillator_index));
+      case vital::SynthOscillator::kRmSample:
+        return "Ring Mod from Sample";
+      case vital::SynthOscillator::kRmGranular:
+        return "Ring Mod from Granular";
+      default:
+        return "";
+    }
+  }
+
   String accessibleParameterText(const ValueBridge& bridge, double normalized_value) {
+    const String distortion_text = oscillatorDistortionValueText(bridge, normalized_value);
+    if (distortion_text.isNotEmpty())
+      return distortion_text;
+
     const auto& settings = accessibilitySpeechSettings();
     if (settings.frequency_values_in_hz &&
         isSemitoneFrequencyParameter(bridge.getParameterId(), bridge.getDetails())) {
@@ -486,6 +542,7 @@ namespace {
   String last_section_name;
   String last_preset_path;
   String last_preset_search;
+  String last_preset_library = kAllLibraries;
   String last_preset_bank = kAllBanks;
   String last_preset_category = kAllCategories;
   bool last_preset_preview = false;
@@ -714,9 +771,35 @@ namespace {
     return parts;
   }
 
+  String sanitizePresetPathPart(String text, const String& fallback) {
+    text = text.trim().removeCharacters("\\/:*?\"<>|");
+    while (text.contains(".."))
+      text = text.replace("..", ".");
+    if (text.isEmpty())
+      text = fallback;
+    return text;
+  }
+
+  String presetLibraryName(const File& preset) {
+    const auto parts = presetPathParts(preset);
+    if (parts.size() > 0) {
+      if (parts[0] == kFactoryLibrary)
+        return kFactoryLibrary;
+      if (parts[0] == kUserLibrary)
+        return kUserLibrary;
+    }
+    return kOtherLibrary;
+  }
+
   String presetBankName(const File& preset) {
     const auto parts = presetPathParts(preset);
     const int preset_folder = indexOfPathPart(parts, LoadSave::kPresetFolderName);
+    if (preset_folder >= 0 && preset_folder + 1 < parts.size() - 1 &&
+        preset_folder == 1 && (parts[0] == kFactoryLibrary || parts[0] == kUserLibrary)) {
+      return parts[preset_folder + 1];
+    }
+    if (preset_folder == 0 && preset_folder + 1 < parts.size() - 1)
+      return parts[preset_folder + 1];
     if (preset_folder > 0)
       return parts[preset_folder - 1];
     return preset.getParentDirectory().getFileName();
@@ -725,9 +808,15 @@ namespace {
   String presetCategoryName(const File& preset) {
     const auto parts = presetPathParts(preset);
     const int preset_folder = indexOfPathPart(parts, LoadSave::kPresetFolderName);
-    if (preset_folder >= 0 && preset_folder + 2 < parts.size()) {
+    int category_start = preset_folder + 1;
+    if (preset_folder >= 0 && preset_folder == 1 && (parts[0] == kFactoryLibrary || parts[0] == kUserLibrary))
+      category_start = preset_folder + 2;
+    else if (preset_folder == 0)
+      category_start = preset_folder + 2;
+
+    if (preset_folder >= 0 && category_start < parts.size() - 1) {
       StringArray category_parts;
-      for (int i = preset_folder + 1; i < parts.size() - 1; ++i)
+      for (int i = category_start; i < parts.size() - 1; ++i)
         category_parts.add(parts[i]);
       return category_parts.joinIntoString(" / ");
     }
@@ -737,6 +826,18 @@ namespace {
       return style;
 
     return "Uncategorized";
+  }
+
+  StringArray presetTagNames(const File& preset) {
+    StringArray tags;
+    tags.addTokens(LoadSave::getTagsFromFile(preset), ",", "");
+    for (int i = tags.size() - 1; i >= 0; --i) {
+      tags.set(i, tags[i].trim());
+      if (tags[i].isEmpty())
+        tags.remove(i);
+    }
+    tags.removeDuplicates(false);
+    return tags;
   }
 
   bool isRoutingParameter(const String& id) {
@@ -2780,6 +2881,21 @@ SynthEditor::SynthEditor(SynthPlugin& synth) :
   preset_menu_.onClick = [this] { showPresetMenu(); };
   addChildComponent(preset_menu_);
 
+  preset_library_.setTitle("Preset library");
+  preset_library_.setDescription("Filter presets by factory, user, or other installed libraries");
+  preset_library_.setHelpText("Choose all libraries, factory, user, or other preset locations");
+  preset_library_.setWantsKeyboardFocus(true);
+  preset_library_.onChange = [this] {
+    if (updating_preset_list_)
+      return;
+    last_preset_library = preset_library_.getText();
+    last_preset_bank = kAllBanks;
+    last_preset_category = kAllCategories;
+    populatePresetFilters();
+    filterPresetList();
+  };
+  addChildComponent(preset_library_);
+
   preset_bank_.setTitle("Preset bank");
   preset_bank_.setDescription("Filter presets by bank or sound pack");
   preset_bank_.setHelpText("Choose all banks or one installed bank");
@@ -2807,7 +2923,7 @@ SynthEditor::SynthEditor(SynthPlugin& synth) :
   addChildComponent(preset_category_);
 
   preset_search_.setTitle("Preset search");
-  preset_search_.setDescription("Filter presets by name, folder, author, or style");
+  preset_search_.setDescription("Filter presets by name, folder, author, category, or tags");
   preset_search_.setHelpText("Type text to narrow the preset list");
   preset_search_.setTextToShowWhenEmpty("Search presets", Colours::grey);
   preset_search_.setWantsKeyboardFocus(true);
@@ -2852,6 +2968,39 @@ SynthEditor::SynthEditor(SynthPlugin& synth) :
   preset_name_editor_.setTextToShowWhenEmpty("Preset name", Colours::grey);
   preset_name_editor_.setWantsKeyboardFocus(true);
   addChildComponent(preset_name_editor_);
+
+  save_patch_prompt_.setTitle("Save patch");
+  save_patch_prompt_.setDescription("Save the current Atlas patch");
+  save_patch_prompt_.setColour(Label::textColourId, Colours::white);
+  save_patch_prompt_.setJustificationType(Justification::centredLeft);
+  addChildComponent(save_patch_prompt_);
+
+  auto configureSaveEditor = [this](TextEditor& editor, const String& title, const String& empty_text) {
+    editor.setTitle(title);
+    editor.setDescription(title);
+    editor.setHelpText("Type " + title.toLowerCase());
+    editor.setTextToShowWhenEmpty(empty_text, Colours::grey);
+    editor.setSelectAllWhenFocused(true);
+    editor.setWantsKeyboardFocus(true);
+    addChildComponent(editor);
+  };
+  configureSaveEditor(save_patch_name_, "Patch name", "Name");
+  configureSaveEditor(save_patch_author_, "Patch author", "Author");
+  configureSaveEditor(save_patch_bank_, "Patch bank", "Bank");
+  configureSaveEditor(save_patch_category_, "Patch category", "Category");
+  configureSaveEditor(save_patch_tags_, "Patch tags", "Tags separated by commas");
+  save_patch_ok_.setTitle("Save patch");
+  save_patch_ok_.setDescription("Save patch to the user library");
+  save_patch_ok_.setHelpText("Press Enter to save the patch");
+  save_patch_ok_.setWantsKeyboardFocus(true);
+  save_patch_ok_.onClick = [this] { commitSavePresetDialog(); };
+  addChildComponent(save_patch_ok_);
+  save_patch_cancel_.setTitle("Cancel save patch");
+  save_patch_cancel_.setDescription("Close the save patch form without saving");
+  save_patch_cancel_.setHelpText("Press Enter to cancel");
+  save_patch_cancel_.setWantsKeyboardFocus(true);
+  save_patch_cancel_.onClick = [this] { hideSavePresetDialog(); };
+  addChildComponent(save_patch_cancel_);
 
   wavetable_name_.setTitle("Current wavetable");
   wavetable_name_.setDescription("Name of the wavetable loaded in the selected oscillator");
@@ -3345,7 +3494,11 @@ SynthEditor::SynthEditor(SynthPlugin& synth) :
   addAndMakeVisible(viewport_);
 
   buildSections();
-  refreshPresetList();
+  refreshPresetList(false);
+  const int imported = synth_.takeDownloadedPresetsImported();
+  if (imported > 0)
+    postPluginAnnouncement("Imported " + String(imported) + " new presets from Downloads folder",
+                           AccessibilityHandler::AnnouncementPriority::high);
   group_selector_.setVisible(!show_all_sections_);
   section_selector_.setVisible(!show_all_sections_);
   String initial_section = last_section_name;
@@ -3396,6 +3549,7 @@ void SynthEditor::resized() {
     preset_summary_.setBounds(bounds.removeFromTop(54));
     auto menu_row = bounds.removeFromTop(38);
     preset_menu_.setBounds(menu_row.removeFromLeft(150).reduced(3));
+    preset_library_.setBounds(menu_row.removeFromLeft(jmax(130, menu_row.getWidth() / 3)).reduced(3));
     preset_bank_.setBounds(menu_row.removeFromLeft(menu_row.getWidth() / 2).reduced(3));
     preset_category_.setBounds(menu_row.reduced(3));
     auto search_row = bounds.removeFromTop(38);
@@ -3404,6 +3558,20 @@ void SynthEditor::resized() {
     auto save_row = bounds.removeFromTop(38);
     preset_preview_.setBounds(save_row.removeFromLeft(220).reduced(3));
     preset_name_editor_.setBounds(save_row.reduced(3));
+  }
+  if (save_patch_dialog_visible_) {
+    bounds.removeFromTop(8);
+    save_patch_prompt_.setBounds(bounds.removeFromTop(34));
+    auto first_row = bounds.removeFromTop(38);
+    save_patch_name_.setBounds(first_row.removeFromLeft(first_row.getWidth() / 2).reduced(3));
+    save_patch_author_.setBounds(first_row.reduced(3));
+    auto second_row = bounds.removeFromTop(38);
+    save_patch_bank_.setBounds(second_row.removeFromLeft(second_row.getWidth() / 2).reduced(3));
+    save_patch_category_.setBounds(second_row.reduced(3));
+    auto third_row = bounds.removeFromTop(38);
+    save_patch_tags_.setBounds(third_row.removeFromLeft(jmax(180, third_row.getWidth() - 220)).reduced(3));
+    save_patch_ok_.setBounds(third_row.removeFromLeft(100).reduced(3));
+    save_patch_cancel_.setBounds(third_row.removeFromLeft(120).reduced(3));
   }
   if (wavetable_name_.isVisible()) {
     bounds.removeFromTop(8);
@@ -4457,6 +4625,7 @@ void SynthEditor::showAllSections(bool announce) {
       };
 
       addPresetControl(preset_menu_);
+      addPresetControl(preset_library_);
       addPresetControl(preset_bank_);
       addPresetControl(preset_category_);
       addPresetControl(preset_search_);
@@ -5170,6 +5339,22 @@ void SynthEditor::rebuildFocusOrder() {
     accessibility_focus_order_.push_back(&modulation_amount_ok_);
     accessibility_focus_order_.push_back(&modulation_amount_cancel_);
   }
+  if (save_patch_dialog_visible_) {
+    focus_order_.push_back(&save_patch_name_);
+    focus_order_.push_back(&save_patch_author_);
+    focus_order_.push_back(&save_patch_bank_);
+    focus_order_.push_back(&save_patch_category_);
+    focus_order_.push_back(&save_patch_tags_);
+    focus_order_.push_back(&save_patch_ok_);
+    focus_order_.push_back(&save_patch_cancel_);
+    accessibility_focus_order_.push_back(&save_patch_name_);
+    accessibility_focus_order_.push_back(&save_patch_author_);
+    accessibility_focus_order_.push_back(&save_patch_bank_);
+    accessibility_focus_order_.push_back(&save_patch_category_);
+    accessibility_focus_order_.push_back(&save_patch_tags_);
+    accessibility_focus_order_.push_back(&save_patch_ok_);
+    accessibility_focus_order_.push_back(&save_patch_cancel_);
+  }
   if (show_all_sections_) {
     for (auto* component : row_focus_order_)
       focus_order_.push_back(component);
@@ -5182,6 +5367,7 @@ void SynthEditor::rebuildFocusOrder() {
   focus_order_.push_back(&section_selector_);
   if (preset_controls_visible_) {
     focus_order_.push_back(&preset_menu_);
+    focus_order_.push_back(&preset_library_);
     focus_order_.push_back(&preset_bank_);
     focus_order_.push_back(&preset_category_);
     focus_order_.push_back(&preset_search_);
@@ -5408,27 +5594,39 @@ void SynthEditor::setPresetControlsVisible(bool visible) {
   if (!show_all_sections_) {
     addChildComponent(preset_summary_);
     addChildComponent(preset_menu_);
+    addChildComponent(preset_library_);
     addChildComponent(preset_bank_);
     addChildComponent(preset_category_);
     addChildComponent(preset_search_);
     addChildComponent(preset_selector_);
     addChildComponent(preset_preview_);
     addChildComponent(preset_name_editor_);
+    addChildComponent(save_patch_prompt_);
+    addChildComponent(save_patch_name_);
+    addChildComponent(save_patch_author_);
+    addChildComponent(save_patch_bank_);
+    addChildComponent(save_patch_category_);
+    addChildComponent(save_patch_tags_);
+    addChildComponent(save_patch_ok_);
+    addChildComponent(save_patch_cancel_);
   }
   preset_summary_.setVisible(visible);
   preset_menu_.setVisible(visible);
+  preset_library_.setVisible(visible);
   preset_bank_.setVisible(visible);
   preset_category_.setVisible(visible);
   preset_search_.setVisible(visible);
   preset_selector_.setVisible(visible);
   preset_preview_.setVisible(visible);
   preset_name_editor_.setVisible(visible);
+  if (!visible)
+    hideSavePresetDialog();
   if (visible)
     updatePresetSummary();
   resized();
 }
 
-void SynthEditor::refreshPresetList() {
+void SynthEditor::refreshPresetList(bool announce) {
   all_presets_.clear();
   LoadSave::getAllPresets(all_presets_);
   LoadSave::FileSorterAscending sorter;
@@ -5436,16 +5634,38 @@ void SynthEditor::refreshPresetList() {
   populatePresetFilters();
   filterPresetList();
   updatePresetSummary();
-  postPluginAnnouncement("Preset list refreshed, " + String(all_presets_.size()) + " presets found",
-                                         AccessibilityHandler::AnnouncementPriority::medium);
+  if (announce)
+    postPluginAnnouncement("Preset list refreshed, " + String(all_presets_.size()) + " presets found",
+                                           AccessibilityHandler::AnnouncementPriority::medium);
 }
 
 void SynthEditor::populatePresetFilters() {
   ScopedValueSetter<bool> guard(updating_preset_list_, true);
 
+  preset_libraries_.clear();
+  preset_libraries_.add(kAllLibraries);
+  for (const auto& preset : all_presets_) {
+    const String library = presetLibraryName(preset);
+    if (library.isNotEmpty() && !preset_libraries_.contains(library))
+      preset_libraries_.add(library);
+  }
+  preset_libraries_.sort(true);
+  preset_libraries_.removeString(kAllLibraries);
+  preset_libraries_.insert(0, kAllLibraries);
+
+  preset_library_.clear(dontSendNotification);
+  preset_library_.addItemList(preset_libraries_, 1);
+  int library_index = preset_libraries_.indexOf(last_preset_library);
+  if (library_index < 0)
+    library_index = 0;
+  preset_library_.setSelectedItemIndex(library_index, dontSendNotification);
+  last_preset_library = preset_library_.getText();
+
   preset_banks_.clear();
   preset_banks_.add(kAllBanks);
   for (const auto& preset : all_presets_) {
+    if (last_preset_library != kAllLibraries && presetLibraryName(preset) != last_preset_library)
+      continue;
     const String bank = presetBankName(preset);
     if (bank.isNotEmpty() && !preset_banks_.contains(bank))
       preset_banks_.add(bank);
@@ -5465,11 +5685,17 @@ void SynthEditor::populatePresetFilters() {
   preset_categories_.clear();
   preset_categories_.add(kAllCategories);
   for (const auto& preset : all_presets_) {
+    if (last_preset_library != kAllLibraries && presetLibraryName(preset) != last_preset_library)
+      continue;
     if (last_preset_bank != kAllBanks && presetBankName(preset) != last_preset_bank)
       continue;
     const String category = presetCategoryName(preset);
     if (category.isNotEmpty() && !preset_categories_.contains(category))
       preset_categories_.add(category);
+    for (const auto& tag : presetTagNames(preset)) {
+      if (tag.isNotEmpty() && !preset_categories_.contains(tag))
+        preset_categories_.add(tag);
+    }
   }
   preset_categories_.sort(true);
   preset_categories_.removeString(kAllCategories);
@@ -5489,19 +5715,24 @@ void SynthEditor::filterPresetList() {
   filtered_presets_.clear();
   const String filter = preset_search_.getText().trim().toLowerCase();
   const File data_directory = LoadSave::getDataDirectory();
+  const String library_filter = preset_library_.getText().isEmpty() ? kAllLibraries : preset_library_.getText();
   const String bank_filter = preset_bank_.getText().isEmpty() ? kAllBanks : preset_bank_.getText();
   const String category_filter = preset_category_.getText().isEmpty() ? kAllCategories : preset_category_.getText();
 
   for (const auto& preset : all_presets_) {
+    const String library = presetLibraryName(preset);
     const String bank = presetBankName(preset);
     const String category = presetCategoryName(preset);
+    const StringArray tags = presetTagNames(preset);
+    if (library_filter != kAllLibraries && library != library_filter)
+      continue;
     if (bank_filter != kAllBanks && bank != bank_filter)
       continue;
-    if (category_filter != kAllCategories && category != category_filter)
+    if (category_filter != kAllCategories && category != category_filter && !tags.contains(category_filter))
       continue;
 
     const String searchable = (preset.getFileNameWithoutExtension() + " " +
-                               bank + " " + category + " " +
+                               library + " " + bank + " " + category + " " + tags.joinIntoString(" ") + " " +
                                preset.getRelativePathFrom(data_directory) + " " +
                                LoadSave::getAuthorFromFile(preset) + " " +
                                LoadSave::getStyleFromFile(preset)).toLowerCase();
@@ -5515,7 +5746,8 @@ void SynthEditor::filterPresetList() {
   preset_selector_.clear(dontSendNotification);
   for (int i = 0; i < filtered_presets_.size(); ++i) {
     const auto& preset = filtered_presets_.getReference(i);
-    String label = preset.getFileNameWithoutExtension() + " — " + presetBankName(preset);
+    String label = preset.getFileNameWithoutExtension() + " — " + presetLibraryName(preset) +
+                   " — " + presetBankName(preset);
     const String category = presetCategoryName(preset);
     if (category.isNotEmpty() && category != "Uncategorized")
       label += " — " + category;
@@ -5543,7 +5775,9 @@ void SynthEditor::updatePresetSummary() {
   const String summary = "Current preset: " + current +
                          ". Atlas resources path: " + LoadSave::getDataDirectory().getFullPathName() +
                          ". " + String(all_presets_.size()) + " presets found, " +
-                         String(filtered_presets_.size()) + " shown. Bank: " +
+                         String(filtered_presets_.size()) + " shown. Library: " +
+                         (preset_library_.getText().isEmpty() ? kAllLibraries : preset_library_.getText()) +
+                         ". Bank: " +
                          (preset_bank_.getText().isEmpty() ? kAllBanks : preset_bank_.getText()) +
                          ". Category: " +
                          (preset_category_.getText().isEmpty() ? kAllCategories : preset_category_.getText()) +
@@ -5566,6 +5800,8 @@ void SynthEditor::showPresetMenu() {
   menu.addSeparator();
   menu.addItem(7, preset_preview_.getToggleState() ? "Turn autoload preset when scrolling off"
                                                    : "Turn autoload preset when scrolling on");
+  menu.addItem(9, LoadSave::shouldScanDownloads() ? "Turn scan Downloads folder on startup off"
+                                                  : "Turn scan Downloads folder on startup on");
 
   menu.showMenuAsync(PopupMenu::Options().withTargetComponent(preset_menu_),
                      [this](int result) {
@@ -5580,7 +5816,27 @@ void SynthEditor::showPresetMenu() {
     else if (result == 7) {
       preset_preview_.setToggleState(!preset_preview_.getToggleState(), sendNotificationSync);
     }
+    else if (result == 9)
+      toggleScanDownloads();
   });
+}
+
+void SynthEditor::toggleScanDownloads() {
+  const bool enabled = !LoadSave::shouldScanDownloads();
+  LoadSave::saveScanDownloads(enabled);
+
+  if (enabled) {
+    const int imported = LoadSave::scanDownloadsForPresets();
+    refreshPresetList(false);
+    String message = "Scan Downloads folder for presets on startup on";
+    if (imported > 0)
+      message += ", " + String(imported) + " new presets imported";
+    postPluginAnnouncement(message, AccessibilityHandler::AnnouncementPriority::high);
+  }
+  else {
+    postPluginAnnouncement("Scan Downloads folder for presets on startup off",
+                           AccessibilityHandler::AnnouncementPriority::high);
+  }
 }
 
 
@@ -5589,6 +5845,11 @@ void SynthEditor::selectPresetFile(const File& file) {
   if (!file.existsAsFile())
     return;
   last_preset_path = file.getFullPathName();
+  String library = presetLibraryName(file);
+  if (preset_libraries_.contains(library)) {
+    last_preset_library = library;
+    populatePresetFilters();
+  }
   String bank = presetBankName(file);
   if (preset_banks_.contains(bank)) {
     last_preset_bank = bank;
@@ -5640,6 +5901,15 @@ void SynthEditor::loadPresetFile(const File& file, bool preview) {
   selectPresetFile(file);
   updatePresetSummary();
   restoreFocusAfterRebuild(parameter_id, persistent_focus, accessible_title);
+  if (preview || persistent_focus == &preset_selector_) {
+    Component::SafePointer<Component> preset_list_focus(&preset_selector_);
+    MessageManager::callAsync([this, preset_list_focus] {
+      if (preset_list_focus != nullptr && preset_list_focus->isShowing()) {
+        ensureComponentVisible(preset_list_focus.getComponent());
+        preset_list_focus->grabKeyboardFocus();
+      }
+    });
+  }
   postPluginAnnouncement((preview ? "Autoloaded preset " : "Loaded preset ") +
                                            file.getFileNameWithoutExtension(),
                                          preview ? AccessibilityHandler::AnnouncementPriority::medium
@@ -5798,20 +6068,74 @@ void SynthEditor::savePresetToUserDirectory() {
 }
 
 void SynthEditor::savePresetAs() {
+  showSavePresetDialog();
+}
+
+void SynthEditor::showSavePresetDialog() {
   String preset_name = preset_name_editor_.getText().trim();
   if (preset_name.isEmpty())
     preset_name = synth_.getPresetName().isEmpty() ? "Untitled" : synth_.getPresetName();
-  preset_chooser_ = std::make_unique<FileChooser>("Save Atlas preset",
-                                                  LoadSave::getUserPresetDirectory().getChildFile(preset_name),
-                                                  String("*.") + vital::kPresetExtension);
-  preset_chooser_->launchAsync(FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles |
-                                   FileBrowserComponent::warnAboutOverwriting,
-                               [this](const FileChooser& chooser) {
-    const auto file = chooser.getResult();
-    if (file != File())
-      savePresetFile(file);
-    preset_chooser_.reset();
+  save_patch_name_.setText(preset_name, false);
+  save_patch_author_.setText(synth_.getAuthor().isNotEmpty() ? synth_.getAuthor() : String(LoadSave::getAuthor()), false);
+  save_patch_bank_.setText(last_preset_bank != kAllBanks ? last_preset_bank : "User", false);
+  save_patch_category_.setText(synth_.getStyle().isNotEmpty() ? synth_.getStyle() :
+                               (last_preset_category != kAllCategories ? last_preset_category : ""), false);
+  save_patch_tags_.setText(synth_.getTags(), false);
+  save_patch_prompt_.setText("Save patch", dontSendNotification);
+  save_patch_dialog_visible_ = true;
+  save_patch_prompt_.setVisible(true);
+  save_patch_name_.setVisible(true);
+  save_patch_author_.setVisible(true);
+  save_patch_bank_.setVisible(true);
+  save_patch_category_.setVisible(true);
+  save_patch_tags_.setVisible(true);
+  save_patch_ok_.setVisible(true);
+  save_patch_cancel_.setVisible(true);
+  rebuildFocusOrder();
+  resized();
+  MessageManager::callAsync([this] {
+    if (save_patch_name_.isShowing())
+      save_patch_name_.grabKeyboardFocus();
   });
+}
+
+void SynthEditor::hideSavePresetDialog() {
+  save_patch_dialog_visible_ = false;
+  save_patch_prompt_.setVisible(false);
+  save_patch_name_.setVisible(false);
+  save_patch_author_.setVisible(false);
+  save_patch_bank_.setVisible(false);
+  save_patch_category_.setVisible(false);
+  save_patch_tags_.setVisible(false);
+  save_patch_ok_.setVisible(false);
+  save_patch_cancel_.setVisible(false);
+  rebuildFocusOrder();
+  resized();
+}
+
+void SynthEditor::commitSavePresetDialog() {
+  String preset_name = sanitizePresetPathPart(save_patch_name_.getText(), "Untitled");
+  String bank = sanitizePresetPathPart(save_patch_bank_.getText(), "User");
+  String category = sanitizePresetPathPart(save_patch_category_.getText(), "");
+  String author = save_patch_author_.getText().trim().removeCharacters("\"");
+  String tags = save_patch_tags_.getText().trim().removeCharacters("\"");
+
+  if (category == ".")
+    category = "";
+
+  synth_.setPresetName(preset_name);
+  synth_.setAuthor(author);
+  synth_.setStyle(category);
+  synth_.setTags(tags);
+  preset_name_editor_.setText(preset_name, false);
+
+  File destination = LoadSave::getUserPresetDirectory().getChildFile(bank);
+  if (category.isNotEmpty())
+    destination = destination.getChildFile(category);
+  destination = destination.getChildFile(preset_name);
+
+  hideSavePresetDialog();
+  savePresetFile(destination);
 }
 
 void SynthEditor::savePresetFile(const File& file) {

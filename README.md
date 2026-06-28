@@ -14,6 +14,10 @@ This is based on the open source Vital codebase. It is not the official Vital ap
 - Six envelopes, eight LFOs, four random modulators, and sixteen renamable macros.
 - Accessible LFO editing, including point editing, curve choices, grid controls, and keyboard-driven navigation.
 - Better sample and wavetable browsing, with load, previous, next, and folder browser controls.
+- Optional scanning of the Downloads folder for Atlas presets, so presets people send you can be picked up without manual file digging.
+- A better preset browser with Library, Bank, Category, and preset list filters.
+- An Atlas save patch form inside the plugin, with name, author, bank, category, and comma-separated tags.
+- Preset tags are saved in `.atp` files and can be used as browser categories.
 - Three effect busses, bus routing, source routing, filter routing, main effects routing, and direct out options.
 - More effects than the original Vital build: utility, limiter, frequency shifter, phase shift, and dimension expander, alongside the original chorus, compressor, delay, distortion, EQ, filter, flanger, phaser, and reverb.
 - Keyboard shortcuts to jump around the synth faster instead of tabbing through everything.
@@ -24,6 +28,8 @@ This is based on the open source Vital codebase. It is not the official Vital ap
 Atlas has a separate accessible layout instead of trying to make VoiceOver follow the original visual UI. Controls are grouped by the way you actually use the synth: oscillators together, filters together, busses together, and so on.
 
 Sliders can be adjusted from the keyboard, values can be typed in, defaults can be restored, macros can be renamed, and modulation assignment is designed to be reachable without using a mouse.
+
+The preset area is also meant to work from the keyboard: you can filter by library, bank, and category, save patches without using the operating system save dialog, and turn on autoload when scrolling if you want presets to load as you move through the list.
 
 The goal is not just that VoiceOver can see the plugin. The goal is that the synth can actually be programmed.
 
@@ -64,6 +70,14 @@ More details are in [BUILDING.md](BUILDING.md).
 - Wavetables: `.att`
 
 Older `.vital`, `.vitalbank`, `.vitallfo`, and `.vitaltable` files can still be loaded, but Atlas presets are not meant to be loaded back into Vital.
+
+Atlas content lives in:
+
+`~/Documents/Alessio Plugins/Atlas`
+
+User presets are saved under:
+
+`~/Documents/Alessio Plugins/Atlas/User/Presets`
 
 ## Notes
 

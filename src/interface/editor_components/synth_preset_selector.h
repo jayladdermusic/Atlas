@@ -52,6 +52,7 @@ class SynthPresetSelector : public SynthSection,
       kClearSkin,
       kLogOut,
       kLogIn,
+      kToggleScanDownloads,
       kNumMenuItems
     };
 
@@ -110,6 +111,7 @@ class SynthPresetSelector : public SynthSection,
     void clearSkin();
     void repaintWithSkin();
     void browsePresets();
+    void toggleScanDownloads();
 
     void addListener(Listener* listener) { listeners_.push_back(listener); }
 
@@ -131,4 +133,3 @@ class SynthPresetSelector : public SynthSection,
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SynthPresetSelector)
 };
-

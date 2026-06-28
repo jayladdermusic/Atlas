@@ -92,6 +92,12 @@ class SynthBase : public MidiManager::Listener {
     void clearActiveFile() { active_file_ = File(); }
     File getActiveFile() { return active_file_; }
 
+    int takeDownloadedPresetsImported() {
+      int count = downloaded_presets_imported_;
+      downloaded_presets_imported_ = 0;
+      return count;
+    }
+
     void setMpeEnabled(bool enabled);
     virtual void beginChangeGesture(const std::string& name) { }
     virtual void endChangeGesture(const std::string& name) { }
@@ -105,11 +111,13 @@ class SynthBase : public MidiManager::Listener {
     void setAuthor(const String& author);
     void setComments(const String& comments);
     void setStyle(const String& comments);
+    void setTags(const String& tags);
     void setPresetName(const String& preset_name);
     void setMacroName(int index, const String& macro_name);
     String getAuthor();
     String getComments();
     String getStyle();
+    String getTags();
     String getPresetName();
     String getMacroName(int index);
 
@@ -181,6 +189,7 @@ class SynthBase : public MidiManager::Listener {
     vital::mono_float memory_input_offset_;
     int memory_index_;
     bool expired_;
+    int downloaded_presets_imported_ = 0;
 
     std::map<std::string, String> save_info_;
     vital::control_map controls_;
