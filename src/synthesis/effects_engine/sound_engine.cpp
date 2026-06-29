@@ -169,6 +169,7 @@ namespace vital {
 
   void SoundEngine::disconnectModulation(const modulation_change& change) {
     change.modulation_processor->setCollapsePolyphonicSource(false);
+    change.modulation_processor->setRefreshSourceWhenIdle(false);
 
     Processor* destination = change.mono_destination;
     if (change.source->owner->isPolyphonic() && change.poly_destination)

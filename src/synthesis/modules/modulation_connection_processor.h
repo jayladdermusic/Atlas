@@ -64,6 +64,8 @@ namespace vital {
       void setCollapsePolyphonicSource(bool collapse) { collapse_polyphonic_source_ = collapse; }
       bool processWhenIdle() const { return process_when_idle_; }
       void setProcessWhenIdle(bool process_when_idle) { process_when_idle_ = process_when_idle; }
+      bool refreshSourceWhenIdle() const { return refresh_source_when_idle_; }
+      void setRefreshSourceWhenIdle(bool refresh_source) { refresh_source_when_idle_ = refresh_source; }
       bool isBipolar() const { return bipolar_->value() != 0.0f; }
       void setBipolar(bool bipolar) { bipolar_->set(bipolar ? 1.0f : 0.0f); }
       bool isStereo() const { return stereo_->value() != 0.0f; }
@@ -79,6 +81,7 @@ namespace vital {
       bool polyphonic_;
       bool collapse_polyphonic_source_;
       bool process_when_idle_;
+      bool refresh_source_when_idle_;
       Value* current_value_;
       Value* bipolar_;
       Value* stereo_;

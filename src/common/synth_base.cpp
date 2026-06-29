@@ -27,8 +27,13 @@
 #include "utils.h"
 
 namespace {
+  bool sourceIsEnvelope(const std::string& source) {
+    return source.rfind("env_", 0) == 0;
+  }
+
   bool sourceCanUpdateIdleDestination(const std::string& source) {
-    return source == "aftertouch" || source == "velocity" || source == "slide" || source == "lift" ||
+    return sourceIsEnvelope(source) ||
+           source == "aftertouch" || source == "velocity" || source == "slide" || source == "lift" ||
            source == "mod_wheel" || source == "pitch_wheel";
   }
 } // namespace
@@ -157,6 +162,7 @@ vital::modulation_change SynthBase::createModulationChange(vital::ModulationConn
   change.poly_destination = engine_->getPolyModulationDestination(connection->destination_name);
   change.modulation_processor = connection->modulation_processor.get();
   change.modulation_processor->setProcessWhenIdle(sourceCanUpdateIdleDestination(connection->source_name));
+  change.modulation_processor->setRefreshSourceWhenIdle(sourceIsEnvelope(connection->source_name));
 
   int num_audio_rate = 0;
   vital::ModulationConnectionBank& modulation_bank = getModulationBank();
