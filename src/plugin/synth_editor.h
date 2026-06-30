@@ -164,6 +164,9 @@ class SynthEditor : public AudioProcessorEditor, public SynthGuiInterface,
     void showAllSections(bool announce);
     std::unique_ptr<AccessibleParameterRow> createAccessibleParameterRow(AudioProcessorParameter& parameter,
                                                                          const String& sectionName) const;
+    int sampleLoopPointLength() const;
+    void toggleSampleLoopFineTune();
+    void wireSampleLoopFineTune(AccessibleParameterRow& row);
     bool shouldShowParameterInSection(const String& sectionName, AudioProcessorParameter* parameter) const;
     bool refreshFilterRowsIfNeeded();
     bool refreshZoneCrossfadeRowIfNeeded();
@@ -416,6 +419,7 @@ class SynthEditor : public AudioProcessorEditor, public SynthGuiInterface,
     Component rows_container_;
     std::vector<std::unique_ptr<Component>> section_headers_;
     std::vector<std::unique_ptr<AccessibleParameterRow>> rows_;
+    bool fine_tune_sample_loop_ = false;
     std::map<String, std::vector<AudioProcessorParameter*>> sections_;
     std::map<String, StringArray> group_sections_;
     std::map<String, ValueBridge*> parameters_by_id_;

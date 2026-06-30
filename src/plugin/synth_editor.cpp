@@ -264,6 +264,10 @@ namespace {
     }
   }
 
+  bool isSampleLoopPointParameter(const String& id) {
+    return id == "sample_loop_start" || id == "sample_loop_end";
+  }
+
   String accessibleParameterText(const ValueBridge& bridge, double normalized_value) {
     const String distortion_text = oscillatorDistortionValueText(bridge, normalized_value);
     if (distortion_text.isNotEmpty())
@@ -2988,6 +2992,16 @@ class AccessibleParameterRow : public Component {
       updateAccessibleCommand();
     }
 
+    void setFineTuneCallbacks(std::function<bool()> getState, std::function<void()> toggle) {
+      fine_tune_state_ = std::move(getState);
+      fine_tune_toggle_ = std::move(toggle);
+    }
+
+    void notifyDisplayChanged() {
+      if (auto* handler = focusableControl()->getAccessibilityHandler())
+        handler->notifyAccessibilityEvent(AccessibilityEvent::valueChanged);
+    }
+
     void refresh() {
       ScopedValueSetter<bool> guard(updating_, true);
       if (use_toggle_control_)
@@ -3048,6 +3062,7 @@ class AccessibleParameterRow : public Component {
       kContextClearMidi,
       kContextRenameMacro,
       kContextToggleBipolar,
+      kContextFineTune,
       kContextAddModulationBase = 1000,
       kContextEditModulationBase = 2000,
       kContextRemoveModulationBase = 3000,
@@ -3079,6 +3094,8 @@ class AccessibleParameterRow : public Component {
       if (!is_toggle && slider_.onTextEntryCommand)
         menu.addItem(kContextTypeValue, "Type a value...");
       menu.addItem(kContextResetDefault, "Reset to default");
+      if (fine_tune_toggle_)
+        menu.addItem(kContextFineTune, "Fine tune", true, fine_tune_state_ && fine_tune_state_());
       if (canAddModulation(parameter_id)) {
         PopupMenu add_menu = modulation_source_submenu_callback_(parameter_id, add_modulation_choices,
                                                                  kContextAddModulationBase);
@@ -3158,6 +3175,10 @@ class AccessibleParameterRow : public Component {
             if (extra_command_callback_)
               extra_command_callback_(parameter_id, KeyPress('b', ModifierKeys(), 'b'), *invoked);
             break;
+          case kContextFineTune:
+            if (fine_tune_toggle_)
+              fine_tune_toggle_();
+            break;
           default:
             break;
         }
@@ -3192,6 +3213,8 @@ class AccessibleParameterRow : public Component {
     std::function<void(const String&, const String&, Component&)> modulation_remove_callback_;
     std::function<void(const String&, Component&, bool)> midi_learn_callback_;
     std::function<bool(const String&, const KeyPress&, Component&)> extra_command_callback_;
+    std::function<bool()> fine_tune_state_;
+    std::function<void()> fine_tune_toggle_;
     double min_normalized_value_ = 0.0;
     double max_normalized_value_ = 1.0;
     bool use_toggle_control_ = false;
@@ -4459,6 +4482,17 @@ std::unique_ptr<AccessibleParameterRow> SynthEditor::createAccessibleParameterRo
         "Set the MIDI note that plays the loaded sample at its original pitch", true);
   }
 
+  if (isSampleLoopPointParameter(parameter_id)) {
+    return std::make_unique<AccessibleParameterRow>(
+        parameter, bridge->getName(128),
+        [this, bridge](double value) -> String {
+          const int length = sampleLoopPointLength();
+          if (fine_tune_sample_loop_ && length > 0)
+            return String(juce::roundToInt(value * length));
+          return accessibleParameterText(*bridge, value);
+        });
+  }
+
   if (parameter_id.startsWith("random_")) {
     const String suffix = parameter_id.fromFirstOccurrenceOf("random_", false, false)
                                       .fromFirstOccurrenceOf("_", false, false);
@@ -4602,6 +4636,29 @@ std::unique_ptr<AccessibleParameterRow> SynthEditor::createAccessibleParameterRo
 
   return std::make_unique<AccessibleParameterRow>(parameter,
                                                   accessibleParameterTitle(sectionName, parameter.getName(128)));
+}
+
+int SynthEditor::sampleLoopPointLength() const {
+  auto* sample = synth_.getSample();
+  return sample != nullptr ? sample->originalLength() : 0;
+}
+
+void SynthEditor::toggleSampleLoopFineTune() {
+  fine_tune_sample_loop_ = !fine_tune_sample_loop_;
+  for (auto& row : rows_) {
+    if (row != nullptr && isSampleLoopPointParameter(row->parameterId()))
+      row->notifyDisplayChanged();
+  }
+  postPluginAnnouncement(String("Sample loop fine tune ") +
+                             (fine_tune_sample_loop_ ? "on, sample numbers" : "off, percent"),
+                         AccessibilityHandler::AnnouncementPriority::high);
+}
+
+void SynthEditor::wireSampleLoopFineTune(AccessibleParameterRow& row) {
+  if (!isSampleLoopPointParameter(row.parameterId()))
+    return;
+  row.setFineTuneCallbacks([this] { return fine_tune_sample_loop_; },
+                           [this] { toggleSampleLoopFineTune(); });
 }
 
 bool SynthEditor::shouldShowParameterInSection(const String& sectionName, AudioProcessorParameter* parameter) const {
@@ -5097,6 +5154,7 @@ void SynthEditor::showSection(int index, bool announce) {
       return handleMacroShortcut(parameterId, key, target) ||
              handleEffectShortcut(last_section_name, key, target);
     });
+    wireSampleLoopFineTune(*row);
     row->setBounds(0, y, jmax(620, viewport_.getMaximumVisibleWidth()), 48);
     row->setExplicitFocusOrder(focus_order++);
     row->setControlFocusOrder(focus_order++);
@@ -5645,6 +5703,7 @@ void SynthEditor::showAllSections(bool announce) {
           return handleMacroShortcut(parameterId, key, target) ||
                  handleEffectShortcut(section_name, key, target);
         });
+        wireSampleLoopFineTune(*row);
         row->setExplicitFocusOrder(focus_order++);
         row->setControlFocusOrder(focus_order++);
         row->setBounds(flatten_section ? 16 : 10, section_y, jmax(620, width - (flatten_section ? 32 : 34)), 48);
@@ -8436,7 +8495,17 @@ void SynthEditor::applyParameterValue() {
 
   auto* bridge = parameterBridge(parameter_id);
   if (bridge != nullptr) {
-    float value = static_cast<float>(accessibleParameterValueForText(*bridge, modulation_amount_editor_.getText()));
+    float value;
+    if (fine_tune_sample_loop_ && isSampleLoopPointParameter(parameter_id)) {
+      const int length = sampleLoopPointLength();
+      const double normalized = length > 0
+          ? modulation_amount_editor_.getText().trim().getDoubleValue() / length
+          : bridge->getValue();
+      value = static_cast<float>(jlimit(0.0, 1.0, normalized));
+    }
+    else {
+      value = static_cast<float>(accessibleParameterValueForText(*bridge, modulation_amount_editor_.getText()));
+    }
     const int macro_index = macroIndexForControlId(parameter_id);
     if (macro_index >= 0) {
       if (isMacroBipolar(macro_index)) {
