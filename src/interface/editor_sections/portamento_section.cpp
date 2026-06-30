@@ -33,6 +33,10 @@ PortamentoSection::PortamentoSection(String name) : SynthSection(name) {
   portamento_slope_->setSliderStyle(Slider::RotaryHorizontalVerticalDrag);
   portamento_slope_->setLookAndFeel(CurveLookAndFeel::instance());
 
+  zone_crossfade_ = std::make_unique<SynthSlider>("zone_crossfade");
+  addSlider(zone_crossfade_.get());
+  zone_crossfade_->setSliderStyle(Slider::RotaryHorizontalVerticalDrag);
+
   portamento_scale_ = std::make_unique<SynthButton>("portamento_scale");
   addButton(portamento_scale_.get());
   portamento_scale_->setButtonText("OCTAVE SCALE");
@@ -42,6 +46,11 @@ PortamentoSection::PortamentoSection(String name) : SynthSection(name) {
   addButton(portamento_force_.get());
   portamento_force_->setButtonText("ALWAYS GLIDE");
   portamento_force_->setLookAndFeel(TextLookAndFeel::instance());
+
+  portamento_glide_zones_ = std::make_unique<SynthButton>("portamento_glide_zones");
+  addButton(portamento_glide_zones_.get());
+  portamento_glide_zones_->setButtonText("GLIDE ZONES");
+  portamento_glide_zones_->setLookAndFeel(TextLookAndFeel::instance());
 
   legato_ = std::make_unique<SynthButton>("legato");
   legato_->setButtonText("LEGATO");
@@ -65,6 +74,9 @@ void PortamentoSection::paintBackground(Graphics& g) {
   drawTextComponentBackground(g, slope_bounds, true);
   drawLabel(g, TRANS("SLOPE"), slope_bounds, true);
 
+  if (zone_crossfade_->isVisible())
+    drawLabelForComponent(g, TRANS("X-FADE"), zone_crossfade_.get());
+
   paintOpenGlChildrenBackgrounds(g);
 }
 
@@ -74,16 +86,22 @@ void PortamentoSection::resized() {
   int buttons_x = getWidth() - buttons_width;
   int widget_margin = findValue(Skin::kWidgetMargin);
   int internal_margin = widget_margin / 2;
-  float button_height = (height - 2 * (widget_margin + internal_margin)) / 3.0f;
-  portamento_force_->setBounds(buttons_x, widget_margin, buttons_width - widget_margin, button_height);
-  legato_->setBounds(buttons_x, height - widget_margin - button_height,
-                     buttons_width - widget_margin, button_height);
+  int button_width = buttons_width - widget_margin;
+  float button_height = (height - 2 * widget_margin - 3 * internal_margin) / 4.0f;
+  portamento_force_->setBounds(buttons_x, widget_margin, button_width, button_height);
   portamento_scale_->setBounds(buttons_x, portamento_force_->getBottom() + internal_margin,
-                               buttons_width - widget_margin,
-                               legato_->getY() - portamento_force_->getBottom() - 2 * internal_margin);
+                               button_width, button_height);
+  portamento_glide_zones_->setBounds(buttons_x, portamento_scale_->getBottom() + internal_margin,
+                                     button_width, button_height);
+  legato_->setBounds(buttons_x, height - widget_margin - button_height, button_width, button_height);
+
+  setZoneCrossfadeVisible();
+  std::vector<Component*> knobs = { portamento_.get(), portamento_slope_.get() };
+  if (zone_crossfade_->isVisible())
+    knobs.push_back(zone_crossfade_.get());
 
   Rectangle<int> knobs_bounds(0, 0, buttons_x, height);
-  placeKnobsInArea(knobs_bounds, { portamento_.get(), portamento_slope_.get() });
+  placeKnobsInArea(knobs_bounds, knobs);
 
   Rectangle<int> slope_bounds = portamento_slope_->getBounds().withTop(getWidgetMargin());
 
@@ -99,7 +117,18 @@ void PortamentoSection::sliderValueChanged(Slider* changed_slider) {
   SynthSection::sliderValueChanged(changed_slider);
 }
 
+void PortamentoSection::buttonClicked(Button* clicked_button) {
+  SynthSection::buttonClicked(clicked_button);
+  if (clicked_button == portamento_glide_zones_.get())
+    resized();
+}
+
+void PortamentoSection::setZoneCrossfadeVisible() {
+  zone_crossfade_->setVisible(portamento_glide_zones_->getToggleState());
+}
+
 void PortamentoSection::setAllValues(vital::control_map& controls) {
   SynthSection::setAllValues(controls);
   portamento_slope_->setActive(portamento_->getValue() != portamento_->getMinimum());
+  resized();
 }

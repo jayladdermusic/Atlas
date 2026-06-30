@@ -1450,6 +1450,15 @@ namespace {
     return 1000;
   }
 
+  // Tiebreak key used when ordering a section's accessible rows. Parameters with the
+  // same rank fall back to this; mapping zone_crossfade onto a key that begins with
+  // "portamento_glide_zones" keeps it directly after the glide zone crossing toggle.
+  String sectionSortId(const String& id) {
+    if (id == "zone_crossfade")
+      return "portamento_glide_zones_crossfade";
+    return id;
+  }
+
   String readableId(String id) {
     return id.replaceCharacter('_', ' ').toLowerCase().substring(0, 1).toUpperCase()
            + id.replaceCharacter('_', ' ').toLowerCase().substring(1);
@@ -1644,7 +1653,7 @@ namespace {
     if (id.startsWith("utility_")) return "Utility";
     if (id.startsWith("macro_")) return "Macros";
     if (id.contains("voice") || id.startsWith("polyphony") || id.startsWith("portamento") ||
-        id.startsWith("legato")) return "Voice and performance";
+        id.startsWith("legato") || id.startsWith("zone_")) return "Voice and performance";
     return "Master and global";
   }
 
@@ -1778,6 +1787,10 @@ namespace {
       return "Shape the curve of the portamento glide.";
     if (id == "portamento_force")
       return "Force portamento even when notes are not overlapping.";
+    if (id == "portamento_glide_zones")
+      return "When enabled, the glide crosses zone boundaries and each zone's pitch is clamped to its key range.";
+    if (id == "zone_crossfade")
+      return "Set how long zones fade in and out as a glide crosses their boundaries.";
     if (id == "voice_transpose")
       return "Transpose the whole synth in semitones.";
     if (id == "voice_tune")
@@ -4205,7 +4218,7 @@ void SynthEditor::buildSections() {
       const int rank_b = parameterRank(bridge_b->getParameterId());
       if (rank_a != rank_b)
         return rank_a < rank_b;
-      return bridge_a->getParameterId() < bridge_b->getParameterId();
+      return sectionSortId(bridge_a->getParameterId()) < sectionSortId(bridge_b->getParameterId());
     });
   }
 
@@ -4617,6 +4630,13 @@ bool SynthEditor::shouldShowParameterInSection(const String& sectionName, AudioP
       parameter_id.endsWith("_view_2d"))
     return false;
 
+  // The zone crossfade only applies while glide zone crossing is enabled.
+  if (parameter_id == "zone_crossfade") {
+    if (auto* glide_bridge = parameterBridge("portamento_glide_zones"))
+      return glide_bridge->convertToEngineValue(glide_bridge->getValue()) != 0.0f;
+    return false;
+  }
+
   if (isMacroBipolarParameterId(bridge->getParameterId()))
     return false;
 
@@ -4773,6 +4793,34 @@ bool SynthEditor::refreshFilterRowsIfNeeded() {
   if (show_all_sections_)
     showAllSections(false);
   else if (last_section_name == "Filter 1" || last_section_name == "Filter 2" || last_section_name == "Filter")
+    selectSectionByName(last_section_name, false);
+
+  restoreFocusAfterRebuild(parameter_id, persistent_focus, accessible_title);
+
+  return true;
+}
+
+bool SynthEditor::refreshZoneCrossfadeRowIfNeeded() {
+  int glide_zones = 0;
+  if (auto* bridge = parameterBridge("portamento_glide_zones"))
+    glide_zones = static_cast<int>(std::round(bridge->convertToEngineValue(bridge->getValue())));
+
+  if (last_glide_zones_ == glide_zones)
+    return false;
+  last_glide_zones_ = glide_zones;
+
+  // Only the Voice and performance section shows the zone crossfade row, so a
+  // change to glide zone crossing only needs to rebuild that view.
+  if (!show_all_sections_ && last_section_name != "Voice and performance")
+    return false;
+
+  const String parameter_id = focusedParameterId();
+  const String accessible_title = focusedAccessibleTitle();
+  auto* persistent_focus = persistentFocusedComponent();
+
+  if (show_all_sections_)
+    showAllSections(false);
+  else
     selectSectionByName(last_section_name, false);
 
   restoreFocusAfterRebuild(parameter_id, persistent_focus, accessible_title);
@@ -9847,6 +9895,8 @@ bool SynthEditor::keyPressed(const KeyPress& key) {
 
 void SynthEditor::timerCallback() {
   if (refreshFilterRowsIfNeeded())
+    return;
+  if (refreshZoneCrossfadeRowIfNeeded())
     return;
   if (routing_controls_visible_)
     refreshRoutingControls();

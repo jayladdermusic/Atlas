@@ -176,6 +176,7 @@ namespace vital {
     producers_->plug(voice_event(), ProducersModule::kVoiceEvent);
     producers_->plug(bent_midi_, ProducersModule::kMidi);
     producers_->plug(note(), ProducersModule::kZoneMidi);
+    producers_->plug(current_midi_note_->output(), ProducersModule::kZoneGlideMidi);
     producers_->plug(velocity(), ProducersModule::kVelocity);
     producers_->plug(note_count(), ProducersModule::kNoteCount);
     producers_->plug(note_pressed(), ProducersModule::kNotePressed);

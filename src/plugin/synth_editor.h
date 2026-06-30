@@ -166,6 +166,7 @@ class SynthEditor : public AudioProcessorEditor, public SynthGuiInterface,
                                                                          const String& sectionName) const;
     bool shouldShowParameterInSection(const String& sectionName, AudioProcessorParameter* parameter) const;
     bool refreshFilterRowsIfNeeded();
+    bool refreshZoneCrossfadeRowIfNeeded();
     String focusedParameterId() const;
     String focusedAccessibleTitle() const;
     Component* persistentFocusedComponent() const;
@@ -464,6 +465,7 @@ class SynthEditor : public AudioProcessorEditor, public SynthGuiInterface,
     int active_lfo_index_ = 0;
     int last_filter_models_[3] = { -1, -1, -1 };
     int last_filter_styles_[3] = { -1, -1, -1 };
+    int last_glide_zones_ = -1;
     int lfo_cycle_index_ = 3;
     int lfo_grid_index_ = 14;
     float lfo_cursor_phase_ = 0.0f;

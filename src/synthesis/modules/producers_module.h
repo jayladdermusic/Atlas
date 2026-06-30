@@ -17,6 +17,7 @@
 #pragma once
 
 #include "synth_module.h"
+#include "operators.h"
 #include "oscillator_module.h"
 #include "sample_module.h"
 #include "granular_module.h"
@@ -30,6 +31,7 @@ namespace vital {
         kVoiceEvent,
         kMidi,
         kZoneMidi,
+        kZoneGlideMidi,
         kVelocity,
         kActiveVoices,
         kNoteCount,
@@ -91,28 +93,46 @@ namespace vital {
       void setFilter2On(const Value* on) { filter2_on_ = on; }
 
     protected:
+      // Per-block start/end zone gain used to crossfade a producer in or out of its zone.
+      struct ZoneGain {
+        poly_float start;
+        poly_float end;
+      };
+
       bool isFilter1On() { return filter1_on_ == nullptr || filter1_on_->value() != 0.0f; }
       bool isFilter2On() { return filter2_on_ == nullptr || filter2_on_->value() != 0.0f; }
       poly_float getZoneMask(Value* key_start, Value* key_end, Value* velocity_start, Value* velocity_end);
-      void addZonedBuffer(poly_float* dest, const poly_float* source, poly_float zone_mask, int num_samples) const;
+      void plugPitchClamp(cr::ZonePitchClamp* clamp, Value* key_start, Value* key_end);
+      ZoneGain advanceZoneGain(poly_float& gain_state, poly_float target, poly_mask reset_mask,
+                               bool crossfade_on, mono_float max_move);
+      void addZonedBuffer(poly_float* dest, const poly_float* source, const ZoneGain& gain, int num_samples) const;
       OscillatorModule* oscillators_[kNumOscillators];
       Value* oscillator_destinations_[kNumOscillators];
       Value* oscillator_key_zone_start_[kNumOscillators];
       Value* oscillator_key_zone_end_[kNumOscillators];
       Value* oscillator_velocity_zone_start_[kNumOscillators];
       Value* oscillator_velocity_zone_end_[kNumOscillators];
+      cr::ZonePitchClamp* oscillator_pitch_clamp_[kNumOscillators];
+      poly_float oscillator_zone_gain_[kNumOscillators];
       Value* sample_destination_;
       Value* sample_key_zone_start_;
       Value* sample_key_zone_end_;
       Value* sample_velocity_zone_start_;
       Value* sample_velocity_zone_end_;
+      cr::ZonePitchClamp* sample_pitch_clamp_;
+      poly_float sample_zone_gain_;
       SampleModule* sampler_;
       Value* granular_destination_;
       Value* granular_key_zone_start_;
       Value* granular_key_zone_end_;
       Value* granular_velocity_zone_start_;
       Value* granular_velocity_zone_end_;
+      cr::ZonePitchClamp* granular_pitch_clamp_;
+      poly_float granular_zone_gain_;
       GranularModule* granular_;
+
+      Value* portamento_glide_zones_;
+      Value* zone_crossfade_;
 
       const Value* filter1_on_;
       const Value* filter2_on_;

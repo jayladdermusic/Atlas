@@ -763,6 +763,45 @@ namespace vital {
       private:
         JUCE_LEAK_DETECTOR(BilinearInterpolate)
     };
+
+    // Shifts a MIDI pitch so its glide component is clamped to a zone's key range.
+    // When disabled it is a transparent pass-through of the incoming pitch.
+    class ZonePitchClamp : public Operator {
+      public:
+        enum {
+          kMidi,
+          kGlideMidi,
+          kZoneStart,
+          kZoneEnd,
+          kEnable,
+          kNumInputs
+        };
+
+        ZonePitchClamp() : Operator(kNumInputs, 1, true) { }
+
+        virtual Processor* clone() const override {
+          return new ZonePitchClamp(*this);
+        }
+
+        void process(int num_samples) override {
+          poly_float midi = input(kMidi)->at(0);
+          if (input(kEnable)->at(0)[0] == 0.0f) {
+            output()->buffer[0] = midi;
+            return;
+          }
+
+          poly_float glide = input(kGlideMidi)->at(0);
+          poly_float start = input(kZoneStart)->at(0);
+          poly_float end = input(kZoneEnd)->at(0);
+          poly_float low = poly_float::min(start, end);
+          poly_float high = poly_float::max(start, end);
+          poly_float clamped = utils::clamp(glide, low, high);
+          output()->buffer[0] = midi + (clamped - glide);
+        }
+
+      private:
+        JUCE_LEAK_DETECTOR(ZonePitchClamp)
+    };
   } // namespace cr
 } // namespace vital
 

@@ -32,13 +32,18 @@ class PortamentoSection : public SynthSection {
     void paintBackgroundShadow(Graphics& g) override { paintTabShadow(g); }
     void resized() override;
     void sliderValueChanged(Slider* changed_slider) override;
+    void buttonClicked(Button* clicked_button) override;
     void setAllValues(vital::control_map& controls) override;
 
   private:
+    void setZoneCrossfadeVisible();
+
     std::unique_ptr<SynthSlider> portamento_;
     std::unique_ptr<SynthSlider> portamento_slope_;
+    std::unique_ptr<SynthSlider> zone_crossfade_;
     std::unique_ptr<SynthButton> portamento_scale_;
     std::unique_ptr<SynthButton> portamento_force_;
+    std::unique_ptr<SynthButton> portamento_glide_zones_;
     std::unique_ptr<SynthButton> legato_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PortamentoSection)
