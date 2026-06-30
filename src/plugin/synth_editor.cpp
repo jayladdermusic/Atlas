@@ -2894,7 +2894,7 @@ class AccessibleParameterRow : public Component {
           toggle_.getProperties().set("accessibleOffText", accessibleOffText);
         if (accessibleOnText.isNotEmpty())
           toggle_.getProperties().set("accessibleOnText", accessibleOnText);
-        toggle_.setHelpText("Press Space to toggle. Press Shift M for modulation, Shift L for MIDI learn, or Shift C to clear MIDI learn. Press the right bracket key, or VoiceOver Shift M, for the context menu.");
+        toggle_.setHelpText("Press Space to toggle. Press Shift M, the right bracket key, or VoiceOver Shift M for the context menu. Press Shift L for MIDI learn, or Shift C to clear MIDI learn.");
         toggle_.setWantsKeyboardFocus(true);
         toggle_.onClick = [this] {
           parameter_.beginChangeGesture();
@@ -2914,7 +2914,7 @@ class AccessibleParameterRow : public Component {
         slider_.setDescription(parameter_description);
         slider_.setTooltip(parameter_description);
         slider_.setHelpText(random_rate ? "In free mode this controls how long each random cycle lasts. In synced mode use Tempo."
-                                        : "Use arrows for changes, Page Up and Page Down for larger changes, Enter to type a value, Backspace to reset to default, Shift M for modulation, Shift L for MIDI learn, and Shift C to clear MIDI learn. Press the right bracket key, or VoiceOver Shift M, for the context menu.");
+                                        : "Use arrows for changes, Page Up and Page Down for larger changes, Enter to type a value, Backspace to reset to default. Press Shift M, the right bracket key, or VoiceOver Shift M for the context menu. Press Shift L for MIDI learn, and Shift C to clear MIDI learn.");
         slider_.setWantsKeyboardFocus(true);
         slider_.textFromValueFunction = [this](double value) {
           if (text_from_value_)
@@ -2939,11 +2939,6 @@ class AccessibleParameterRow : public Component {
         addAndMakeVisible(slider_);
       }
       refresh();
-    }
-
-    void setModulationMenuCallback(std::function<void(const String&, Component&)> callback) {
-      modulation_menu_callback_ = std::move(callback);
-      updateAccessibleCommand();
     }
 
     void setModulationSourceSubmenuCallback(
@@ -3049,7 +3044,6 @@ class AccessibleParameterRow : public Component {
     enum ContextMenuAction {
       kContextTypeValue = 1,
       kContextResetDefault,
-      kContextAddModulation,
       kContextMidiLearn,
       kContextClearMidi,
       kContextRenameMacro,
@@ -3062,7 +3056,7 @@ class AccessibleParameterRow : public Component {
     bool canAddModulation(const String& parameter_id) const {
       if (parameter_id.isEmpty())
         return false;
-      if (!modulation_menu_callback_ && !(modulation_source_submenu_callback_ && modulation_assign_callback_))
+      if (!(modulation_source_submenu_callback_ && modulation_assign_callback_))
         return false;
       return !is_modulation_destination_ || is_modulation_destination_(parameter_id);
     }
@@ -3086,14 +3080,9 @@ class AccessibleParameterRow : public Component {
         menu.addItem(kContextTypeValue, "Type a value...");
       menu.addItem(kContextResetDefault, "Reset to default");
       if (canAddModulation(parameter_id)) {
-        if (modulation_source_submenu_callback_) {
-          PopupMenu add_menu = modulation_source_submenu_callback_(parameter_id, add_modulation_choices,
-                                                                   kContextAddModulationBase);
-          menu.addSubMenu("Add modulation source", add_menu, !add_modulation_choices.empty());
-        }
-        else {
-          menu.addItem(kContextAddModulation, "Add modulation source...");
-        }
+        PopupMenu add_menu = modulation_source_submenu_callback_(parameter_id, add_modulation_choices,
+                                                                 kContextAddModulationBase);
+        menu.addSubMenu("Add modulation source", add_menu, !add_modulation_choices.empty());
       }
       for (int i = 0; i < static_cast<int>(removable_modulations.size()); ++i)
         menu.addItem(kContextEditModulationBase + i,
@@ -3152,10 +3141,6 @@ class AccessibleParameterRow : public Component {
           case kContextResetDefault:
             resetToDefaultValue();
             break;
-          case kContextAddModulation:
-            if (canAddModulation(parameter_id))
-              modulation_menu_callback_(parameter_id, *invoked);
-            break;
           case kContextMidiLearn:
             if (midi_learn_callback_)
               midi_learn_callback_(parameter_id, *invoked, false);
@@ -3199,7 +3184,6 @@ class AccessibleParameterRow : public Component {
     OffscreenSlider slider_;
     OffscreenToggleButton toggle_;
     std::function<String(double)> text_from_value_;
-    std::function<void(const String&, Component&)> modulation_menu_callback_;
     std::function<PopupMenu(const String&, std::map<int, String>&, int)> modulation_source_submenu_callback_;
     std::function<void(const String&, const String&, Component&)> modulation_assign_callback_;
     std::function<void(const String&, const String&, Component&)> modulation_edit_callback_;
@@ -3335,7 +3319,7 @@ SynthEditor::SynthEditor(SynthPlugin& synth) :
   title_.setColour(Label::textColourId, Colours::white);
   addAndMakeVisible(title_);
 
-  instructions_.setText("Choose a group and element, then use Tab and arrow keys. Comma and period move between elements. Shift M summarizes modulation.",
+  instructions_.setText("Choose a group and element, then use Tab and arrow keys. Comma and period move between elements. On a control, press Shift M, the right bracket key, or VoiceOver Shift M for its context menu.",
                         dontSendNotification);
   instructions_.setTitle("Keyboard instructions");
   instructions_.setColour(Label::textColourId, Colours::white);
@@ -5078,9 +5062,6 @@ void SynthEditor::showSection(int index, bool announce) {
       continue;
 
     auto row = createAccessibleParameterRow(*parameter, section_name);
-    row->setModulationMenuCallback([this](const String& destinationId, Component& target) {
-      showModulationSourceMenuForParameter(destinationId, target);
-    });
     row->setModulationSourceSubmenuCallback([this](const String& destinationId,
                                                    std::map<int, String>& choices, int firstItemId) {
       return createModulationSourceSubmenu(destinationId, choices, firstItemId);
@@ -5265,9 +5246,6 @@ void SynthEditor::showAllSections(bool announce) {
               continue;
 
             auto row = std::make_unique<AccessibleParameterRow>(*parameter);
-            row->setModulationMenuCallback([this](const String& destinationId, Component& target) {
-              showModulationSourceMenuForParameter(destinationId, target);
-            });
             row->setModulationSourceSubmenuCallback([this](const String& destinationId,
                                                            std::map<int, String>& choices, int firstItemId) {
               return createModulationSourceSubmenu(destinationId, choices, firstItemId);
@@ -5629,9 +5607,6 @@ void SynthEditor::showAllSections(bool announce) {
           continue;
 
         auto row = createAccessibleParameterRow(*parameter, section_name);
-        row->setModulationMenuCallback([this](const String& destinationId, Component& target) {
-          showModulationSourceMenuForParameter(destinationId, target);
-        });
         row->setModulationSourceSubmenuCallback([this](const String& destinationId,
                                                        std::map<int, String>& choices, int firstItemId) {
           return createModulationSourceSubmenu(destinationId, choices, firstItemId);
@@ -6153,52 +6128,6 @@ String SynthEditor::modulationControlTitle(const String& parameterId) const {
   if (suffix == "bypass")
     return "Bypass";
   return readableId(suffix);
-}
-
-void SynthEditor::announceModulationSummary() {
-  std::map<String, StringArray> destinations_by_source;
-  for (auto* route : synth_.getModulationConnections()) {
-    if (route == nullptr || route->source_name.empty() || route->destination_name.empty())
-      continue;
-
-    const int index = synth_.getConnectionIndex(route->source_name, route->destination_name);
-    float amount = 0.0f;
-    if (index >= 0) {
-      if (auto* amount_bridge = parameterBridge("modulation_" + String(index + 1) + "_amount"))
-        amount = amount_bridge->convertToEngineValue(amount_bridge->getValue());
-    }
-
-    const String destination = vital::Parameters::isParameter(route->destination_name)
-        ? vital::Parameters::getDisplayName(route->destination_name)
-        : readableId(route->destination_name);
-    const String amount_text = amount == 0.0f ? String("0")
-        : String(amount > 0.0f ? "+" : "") + String(amount, 2);
-    destinations_by_source[modulationSourceLabelForId(route->source_name)].add(destination + " " + amount_text);
-  }
-
-  if (destinations_by_source.empty()) {
-    postPluginAnnouncement("No modulations in this patch",
-                                           AccessibilityHandler::AnnouncementPriority::high);
-    return;
-  }
-
-  StringArray summaries;
-  int total_destinations = 0;
-  for (const auto& [source, destinations] : destinations_by_source) {
-    total_destinations += destinations.size();
-    if (summaries.size() < 12)
-      summaries.add(source + " to " + destinations.joinIntoString(", "));
-  }
-
-  String message = String(destinations_by_source.size()) + " modulation source" +
-                   (destinations_by_source.size() == 1 ? ", " : "s, ") +
-                   String(total_destinations) + " destination" +
-                   (total_destinations == 1 ? ": " : "s: ") +
-                   summaries.joinIntoString("; ");
-  if (static_cast<int>(destinations_by_source.size()) > summaries.size())
-    message += "; plus " + String(static_cast<int>(destinations_by_source.size()) - summaries.size()) +
-               " more sources";
-  postPluginAnnouncement(message, AccessibilityHandler::AnnouncementPriority::high);
 }
 
 void SynthEditor::setPresetControlsVisible(bool visible) {
@@ -8806,26 +8735,6 @@ PopupMenu SynthEditor::createModulationSourceSubmenu(const String& destinationId
   return menu;
 }
 
-void SynthEditor::showModulationSourceMenuForParameter(const String& destinationId, Component& target) {
-  if (destinationId.isEmpty())
-    return;
-
-  std::map<int, String> choice_ids;
-  PopupMenu menu;
-  menu.addSectionHeader("Assign modulation to " + modulationDestinationLabelForId(destinationId));
-  menu.addSubMenu("Add modulation source", createModulationSourceSubmenu(destinationId, choice_ids, 1),
-                  !choice_ids.empty());
-
-  menu.showMenuAsync(PopupMenu::Options().withTargetComponent(&target),
-                     [this, destinationId, choice_ids](int result) {
-    const auto found = choice_ids.find(result);
-    if (found == choice_ids.end())
-      return;
-
-    connectModulationAndPromptForAmount(found->second, destinationId, *this);
-  });
-}
-
 int SynthEditor::getNumRows() { return static_cast<int>(modulation_routes_.size()); }
 
 String SynthEditor::getNameForRow(int row) {
@@ -8914,9 +8823,6 @@ void SynthEditor::showSelectedModulationParameters() {
     if (bridge == nullptr || !bridge->getParameterId().startsWith(prefix))
       continue;
     auto control = std::make_unique<AccessibleParameterRow>(*parameter);
-    control->setModulationMenuCallback([this](const String& destinationId, Component& target) {
-      showModulationSourceMenuForParameter(destinationId, target);
-    });
     control->setModulationSourceSubmenuCallback([this](const String& destinationId,
                                                        std::map<int, String>& choices, int firstItemId) {
       return createModulationSourceSubmenu(destinationId, choices, firstItemId);
@@ -9867,11 +9773,6 @@ bool SynthEditor::keyPressed(const KeyPress& key) {
     return true;
   if (focusShortcutTarget(key))
     return true;
-  if (key.getModifiers().isShiftDown() &&
-      CharacterFunctions::toLowerCase(key.getTextCharacter()) == 'm') {
-    announceModulationSummary();
-    return true;
-  }
   if (effect_chain_controls_visible_) {
     if (isEffectMoveEarlierKey(key)) {
       moveSelectedEffect(-1);

@@ -260,7 +260,6 @@ class SynthEditor : public AudioProcessorEditor, public SynthGuiInterface,
     void cancelInitialModulationAmount();
     PopupMenu createModulationSourceSubmenu(const String& destinationId, std::map<int, String>& choices,
                                             int firstItemId);
-    void showModulationSourceMenuForParameter(const String& destinationId, Component& target);
     ValueBridge* parameterBridge(const String& id) const;
     void setParameterEngineValue(const String& id, float engineValue);
     int getNumRows() override;
@@ -328,7 +327,6 @@ class SynthEditor : public AudioProcessorEditor, public SynthGuiInterface,
     String modulationSlotHeaderTitle(int slot) const;
     String modulationSlotTitle(int slot) const;
     String modulationControlTitle(const String& parameterId) const;
-    void announceModulationSummary();
     bool focusShortcutTarget(const KeyPress& key);
     bool focusGroupShortcut(const String& group, const String& fallbackSection = {});
     bool focusSectionShortcut(const String& section);
