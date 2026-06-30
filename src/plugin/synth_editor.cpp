@@ -26,6 +26,7 @@
 #include "synth_lfo.h"
 #include "synth_oscillator.h"
 #include "synth_strings.h"
+#include "tuning.h"
 #include "utils.h"
 #include "formant_filter.h"
 #include "wavetable.h"
@@ -5854,6 +5855,11 @@ void SynthEditor::showNavigationMenu() {
   menu.addItem(1, "Save patch as default");
   menu.addItem(2, "Initialize patch");
   menu.addItem(3, "Save patch as...");
+  menu.addItem(5, "Export preset...");
+  menu.addSeparator();
+  menu.addItem(6, "Load tuning file...");
+  if (!synth_.getTuning()->isDefault())
+    menu.addItem(7, "Clear tuning: " + String(synth_.getTuning()->getName()));
   menu.addSeparator();
   menu.addItem(4, "Accessibility settings");
 
@@ -5865,6 +5871,12 @@ void SynthEditor::showNavigationMenu() {
       initializePatch();
     else if (result == 3)
       savePresetAs();
+    else if (result == 5)
+      exportPreset();
+    else if (result == 6)
+      loadTuningFile();
+    else if (result == 7)
+      clearTuning();
     else if (result == 4)
       showAccessibilitySettingsMenu();
   });
@@ -6852,6 +6864,52 @@ void SynthEditor::exportFolderAsBank(const File& sourceFolder, const File& desti
   postPluginAnnouncement("Exported bank " + destination.getFileNameWithoutExtension() +
                                          " with " + String(added) + " files",
                                          AccessibilityHandler::AnnouncementPriority::high);
+}
+
+void SynthEditor::loadTuningFile() {
+  tuning_chooser_ = std::make_unique<FileChooser>("Load Tuning", LoadSave::getDataDirectory(),
+                                                  Tuning::allFileExtensions());
+  tuning_chooser_->launchAsync(FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
+                               [this](const FileChooser& chooser) {
+    const File file = chooser.getResult();
+    if (file.existsAsFile()) {
+      synth_.loadTuningFile(file);
+      postPluginAnnouncement("Loaded tuning " + String(synth_.getTuning()->getName()),
+                             AccessibilityHandler::AnnouncementPriority::high);
+    }
+    tuning_chooser_.reset();
+  });
+}
+
+void SynthEditor::clearTuning() {
+  synth_.getTuning()->setDefaultTuning();
+  postPluginAnnouncement("Tuning cleared", AccessibilityHandler::AnnouncementPriority::high);
+}
+
+void SynthEditor::exportPreset() {
+  const File default_file = LoadSave::getUserPresetDirectory()
+                                .getChildFile(synth_.getPresetName().isEmpty() ? String("Untitled")
+                                                                               : synth_.getPresetName())
+                                .withFileExtension(vital::kPresetExtension);
+  export_chooser_ = std::make_unique<FileChooser>("Export Preset", default_file,
+                                                  String("*.") + vital::kPresetExtension);
+  export_chooser_->launchAsync(FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles |
+                                   FileBrowserComponent::warnAboutOverwriting,
+                               [this](const FileChooser& chooser) {
+    const File destination = chooser.getResult();
+    if (destination != File()) {
+      const File preset = destination.withFileExtension(vital::kPresetExtension);
+      if (synth_.saveToFile(preset))
+        postPluginAnnouncement("Exported preset " + preset.getFileNameWithoutExtension(),
+                               AccessibilityHandler::AnnouncementPriority::high);
+      else {
+        NativeMessageBox::showMessageBoxAsync(MessageBoxIconType::WarningIcon, "Unable to export preset",
+                                              "The preset could not be written to disk.");
+        postPluginAnnouncement("Unable to export preset", AccessibilityHandler::AnnouncementPriority::high);
+      }
+    }
+    export_chooser_.reset();
+  });
 }
 
 void SynthEditor::savePresetToUserDirectory() {

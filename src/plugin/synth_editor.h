@@ -203,6 +203,9 @@ class SynthEditor : public AudioProcessorEditor, public SynthGuiInterface,
     void importBankFile(const File& file);
     void chooseFolderToExportBank();
     void exportFolderAsBank(const File& sourceFolder, const File& destinationFile);
+    void loadTuningFile();
+    void clearTuning();
+    void exportPreset();
     void savePresetToUserDirectory();
     void savePresetAs();
     void showSavePresetDialog();
@@ -463,6 +466,8 @@ class SynthEditor : public AudioProcessorEditor, public SynthGuiInterface,
     std::unique_ptr<FileChooser> lfo_chooser_;
     std::unique_ptr<FileChooser> fx_chooser_;
     std::unique_ptr<FileChooser> bank_chooser_;
+    std::unique_ptr<FileChooser> tuning_chooser_;
+    std::unique_ptr<FileChooser> export_chooser_;
     String pending_modulation_source_;
     String pending_modulation_destination_;
     String pending_parameter_value_id_;
