@@ -339,7 +339,7 @@ class SynthEditor : public AudioProcessorEditor, public SynthGuiInterface,
     String modulationControlTitle(const String& parameterId) const;
     bool focusShortcutTarget(const KeyPress& key);
     void toggleQwertyKeyboard();
-    void updateQwertyNotes();
+    bool updateQwertyNotes();
     void allQwertyNotesOff();
     bool isQwertyKeyboardActive() const;
     bool focusGroupShortcut(const String& group, const String& fallbackSection = {});
@@ -512,6 +512,7 @@ class SynthEditor : public AudioProcessorEditor, public SynthGuiInterface,
     int qwerty_octave_ = 5;
     int qwerty_velocity_ = 127;
     std::set<int> qwerty_notes_down_;
+    std::set<int> qwerty_control_keys_down_;
     mutable String pending_effect_chain_section_;
     mutable int pending_effect_chain_selected_index_ = -1;
 

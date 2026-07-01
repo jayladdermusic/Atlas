@@ -5994,7 +5994,7 @@ void SynthEditor::showKeyboardHelp() {
       "  Shift+L - MIDI learn\n"
       "  Shift+C - Clear MIDI learn\n"
       "\n"
-      "QWERTY musical keyboard\n"
+      "Virtual musical keyboard\n"
       "  Alt+K - Toggle the computer-keyboard piano on or off\n"
       "  While active:\n"
       "    C - Octave up\n"
@@ -10125,17 +10125,20 @@ bool SynthEditor::isQwertyKeyboardActive() const {
 
 void SynthEditor::toggleQwertyKeyboard() {
   qwerty_keyboard_on_ = !qwerty_keyboard_on_;
-  if (!qwerty_keyboard_on_)
+  if (!qwerty_keyboard_on_) {
     allQwertyNotesOff();
-  postPluginAnnouncement(qwerty_keyboard_on_ ? "QWERTY keyboard on" : "QWERTY keyboard off",
+    qwerty_control_keys_down_.clear();
+  }
+  postPluginAnnouncement(qwerty_keyboard_on_ ? "Virtual keyboard on" : "Virtual keyboard off",
                          AccessibilityHandler::AnnouncementPriority::high);
 }
 
-void SynthEditor::updateQwertyNotes() {
+bool SynthEditor::updateQwertyNotes() {
   MidiKeyboardState* state = getSynth()->getKeyboardState();
   if (state == nullptr)
-    return;
+    return false;
 
+  bool changed = false;
   const float velocity = qwerty_velocity_ / 127.0f;
   for (const QwertyKeyMapping& mapping : kQwertyKeys) {
     const int note = 12 * qwerty_octave_ + mapping.offset;
@@ -10147,12 +10150,15 @@ void SynthEditor::updateQwertyNotes() {
     if (key_down && !tracked) {
       state->noteOn(1, note, velocity);
       qwerty_notes_down_.insert(note);
+      changed = true;
     }
     else if (!key_down && tracked) {
       state->noteOff(1, note, 0.0f);
       qwerty_notes_down_.erase(note);
+      changed = true;
     }
   }
+  return changed;
 }
 
 void SynthEditor::allQwertyNotesOff() {
@@ -10168,8 +10174,18 @@ bool SynthEditor::keyStateChanged(bool isKeyDown) {
   if (!isQwertyKeyboardActive())
     return false;
 
-  updateQwertyNotes();
-  return true;
+  // Release octave/velocity control keys that are no longer held so they can fire again on
+  // the next physical press (see keyPressed).
+  for (auto it = qwerty_control_keys_down_.begin(); it != qwerty_control_keys_down_.end();) {
+    if (!KeyPress::isKeyCurrentlyDown(*it))
+      it = qwerty_control_keys_down_.erase(it);
+    else
+      ++it;
+  }
+
+  // Only consume the key-state change when it actually drives a qwerty note; otherwise let it
+  // fall through to the host so keys like Escape and Alt+F4 still close the interface.
+  return updateQwertyNotes();
 }
 
 bool SynthEditor::keyPressed(const KeyPress& key) {
@@ -10190,19 +10206,25 @@ bool SynthEditor::keyPressed(const KeyPress& key) {
     const ModifierKeys modifiers = key.getModifiers();
     const int code = key.getKeyCode();
     if (code == 'X' || code == 'C') {
-      allQwertyNotesOff();
-      qwerty_octave_ = jlimit(0, 9, qwerty_octave_ + (code == 'C' ? 1 : -1));
-      postPluginAnnouncement("Octave " + String(qwerty_octave_),
-                             AccessibilityHandler::AnnouncementPriority::high);
+      // Fire once per physical press; ignore OS auto-repeat until the key is released
+      // (keyStateChanged prunes qwerty_control_keys_down_ on release).
+      if (qwerty_control_keys_down_.insert(code).second) {
+        allQwertyNotesOff();
+        qwerty_octave_ = jlimit(0, 9, qwerty_octave_ + (code == 'C' ? 1 : -1));
+        postPluginAnnouncement("Octave " + String(qwerty_octave_),
+                               AccessibilityHandler::AnnouncementPriority::high);
+      }
       return true;
     }
     if (code == 'V' || code == 'B') {
-      int step = modifiers.isShiftDown() ? 1 : 10;
-      if (code == 'V')
-        step = -step;
-      qwerty_velocity_ = jlimit(1, 127, qwerty_velocity_ + step);
-      postPluginAnnouncement("Velocity " + String(qwerty_velocity_),
-                             AccessibilityHandler::AnnouncementPriority::high);
+      if (qwerty_control_keys_down_.insert(code).second) {
+        int step = modifiers.isShiftDown() ? 1 : 10;
+        if (code == 'V')
+          step = -step;
+        qwerty_velocity_ = jlimit(1, 127, qwerty_velocity_ + step);
+        postPluginAnnouncement("Velocity " + String(qwerty_velocity_),
+                               AccessibilityHandler::AnnouncementPriority::high);
+      }
       return true;
     }
     // Consume mapped note keys so single-letter navigation is suppressed; the note on/off
